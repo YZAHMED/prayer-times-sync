@@ -2,6 +2,7 @@
 import fs from 'fs';
 
 const apiKey = process.env.PRAYER_API_KEY;
+const baseUrl = process.env.PRAYER_API_BASE_URL;
 
 // Format dates for Toronto time
 const now = new Date();
@@ -13,7 +14,7 @@ const parts = formatter.formatToParts(now);
 const today = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}`;
 const time = new Intl.DateTimeFormat('en-CA', timeOptions).format(now);
 
-const url = `https://portal.ad-din.ca/v1/masjid/Prayer/GetPrayerTimesOfDay?masjidId=11&day=${today}&time=${time}`;
+const url = `${baseUrl}&day=${today}&time=${time}`;
 
 async function updatePrayers() {
   try {

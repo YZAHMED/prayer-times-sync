@@ -21,6 +21,7 @@ jobs:
       - name: Fetch new prayer times
         env:
           PRAYER_API_KEY: ${{ secrets.PRAYER_API_KEY }}
+          PRAYER_API_BASE_URL: ${{ secrets.PRAYER_API_BASE_URL }}
         run: node update_prayers.mjs
 
       - name: Commit and push changes
