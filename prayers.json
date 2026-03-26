@@ -9,9 +9,9 @@
     "prayerOfDay": {
       "prayerDate": "2026-03-25T00:00:00",
       "hasThirtyDays": false,
-      "updateAfterSunset": false,
+      "updateAfterSunset": true,
       "hijriDate": {
-        "day": 6,
+        "day": 7,
         "month": 10,
         "year": 1447
       },
