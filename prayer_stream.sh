@@ -3,14 +3,23 @@
 
 # Grab today's day of the week (1=Monday, 7=Sunday)
 DAY_OF_WEEK=$(date +%u) 
-STREAM_URL="https://listen.mixlr.com/565d1c1e9d73351efa312d3a9f94341c"
+
+# Fetch the latest dynamically generated settings from GitHub
+STREAM_URL=$(curl -s "https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/stream_url.txt")
+VOLUME_LEVEL=$(curl -s "https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/volume.txt")
+
+# Safety Fallback: If curl fails or volume.txt is empty, default to 100
+if [ -z "$VOLUME_LEVEL" ]; then
+    VOLUME_LEVEL="100"
+fi
+
 CRON_TMP="/tmp/prayer_crontab"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/prayers.json"
 
 # 1. Clean the crontab of old stream jobs
-# crontab -l prints the current schedule.
-# grep -v "filters OUT" any lines containing the stream URL or this script.
-crontab -l 2>/dev/null | grep -v "$STREAM_URL" | grep -v "/usr/local/bin/prayer_stream.sh" > "$CRON_TMP"
+# FIX: Searching only for "mpv --volume" ignores the actual number. 
+# It will successfully delete the old jobs whether the volume was 50, 100, or 150.
+crontab -l 2>/dev/null | grep -v "mpv --volume" | grep -v "/usr/local/bin/prayer_stream.sh" > "$CRON_TMP"
 
 # 2. Schedule THIS script to run every day at 2:30 AM
 echo "30 2 * * * /usr/local/bin/prayer_stream.sh" >> "$CRON_TMP"
@@ -59,10 +68,10 @@ for PRAYER in $PRAYERS; do
         START_H=$((START_MINS / 60))
         START_M=$((START_MINS % 60))
 
-        # Build the exact crontab string and append (>>) it to our temporary file
+        # Build the exact crontab string using the dynamic $VOLUME_LEVEL
         # timeout $DURATION_SEC: Automatically kills mpv when the time is up.
         # >/dev/null 2>&1: Plugs the output into a "black hole" so the system doesn't try to email you logs.
-        echo "$START_M $START_H * * * /usr/bin/timeout $DURATION_SEC mpv --volume=150 --af=loudnorm \"$STREAM_URL\" >/dev/null 2>&1" >> "$CRON_TMP"
+        echo "$START_M $START_H * * * /usr/bin/timeout $DURATION_SEC mpv --volume=$VOLUME_LEVEL --af=loudnorm \"$STREAM_URL\" >/dev/null 2>&1" >> "$CRON_TMP"
     fi
 done
 

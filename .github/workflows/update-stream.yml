@@ -2,7 +2,7 @@ name: Update Stream Url
 
 on:
   schedule:
-    - cron: '0 0 * * *' # Adjust the schedule to run before your daily prayers
+    - cron: '0 5 * * *' # Adjust the schedule to run before your daily prayers
   workflow_dispatch: # Allows manual triggering of the workflow
 
 permissions:
