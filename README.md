@@ -181,3 +181,34 @@ This project isn’t about prayer times or streaming.
 It’s about proving that:
 
 > You don’t need heavy infrastructure to build reliable, real-world systems.
+
+---
+
+## 🛠️ Edge Device Provisioning
+
+The edge device requires zero application-level configuration. Follow these steps to set up the device:
+
+### 1. Install System Dependencies
+
+Run the following commands to install the required dependencies:
+
+```bash
+sudo apt update && sudo apt install curl jq mpv -y
+```
+
+### 2. Download the Provisioning Script
+
+Use the following commands to download and set up the provisioning script:
+
+```bash
+sudo curl -o /usr/local/bin/prayer_stream.sh https://raw.githubusercontent.com/YOUR_REPO/main/prayer_stream.sh
+sudo chmod +x /usr/local/bin/prayer_stream.sh
+```
+
+### 3. Initialize the Self-Healing Local Queue
+
+Run the script once to initialize the local queue:
+
+```bash
+/usr/local/bin/prayer_stream.sh
+```
