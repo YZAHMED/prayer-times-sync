@@ -8,54 +8,49 @@ A production-grade system designed to reliably trigger real-world events based o
 
 Certain real-world workflows depend on time-critical external data that changes daily:
 
-- **Prayer times**
-- **Live stream URLs** (ephemeral tokens)
-- **Event-based triggers** tied to external APIs
+* **Prayer times** or celestial events
+* **Live stream URLs** (ephemeral tokens)
+* **Event-based triggers** tied to external APIs
 
-### The typical approach:
+### The Typical Approach
+1. Run a backend server on the edge device.
+2. Maintain local state and secrets.
+3. Handle scheduling, web scraping, and execution simultaneously.
 
-1. Run a backend server
-2. Maintain state
-3. Handle scheduling + scraping + execution
-
-#### This introduces:
-
-- Infrastructure overhead
-- Cost
-- Complexity at the edge (especially on low-power devices)
+### The Bottleneck
+This introduces unnecessary infrastructure overhead, ongoing hosting costs, and complexity at the edge—especially when deploying to low-power IoT devices that are prone to power loss or SD card corruption.
 
 ---
 
-## 💡 The Approach
+## 💡 The Architecture
 
-This project rethinks the architecture completely:
+This project rethinks the architecture completely by decoupling data aggregation from physical execution:
 
-- **Move intelligence to the cloud.** Keep the edge dumb, reliable, and stateless.
-- Instead of running logic on the device:
-  - All heavy computation, scraping, and data preparation happens in CI/CD.
-  - The edge device becomes a pure executor of precomputed state.
+* **Move intelligence to the cloud.** Keep the edge dumb, reliable, and stateless.
+* Instead of running complex logic on the device:
+  * All heavy computation, scraping, and data preparation happens in a CI/CD pipeline.
+  * The edge device acts strictly as a pure executor of precomputed state.
 
----
-
-## 🏗️ Architecture (High-Level)
+### High-Level Data Flow
 
 ```plaintext
-External APIs + Dynamic Web Players
+[ External APIs + Dynamic Web Players ]
             ↓
-   CI/CD Pipeline (GitHub Actions)
-   - Scrapes dynamic content (Puppeteer)
-   - Extracts stream URLs
-   - Computes daily schedule
+[ CI/CD Pipeline (GitHub Actions) ]
+   - Scrapes dynamic content via headless Chromium (Puppeteer)
+   - Extracts ephemeral stream URLs
+   - Computes daily scheduling offsets
             ↓
-      Git Repository (State Layer)
-   - prayers.json
-   - stream_url.txt
-   - volume.txt
+[ Git Repository (State Layer) ]
+   - prayers.json (Core Data)
+   - offsets.json (Granular Timing Logic)
+   - stream_url.txt (Media Target)
+   - volume.txt (Hardware State)
             ↓
-   Edge Device (Raspberry Pi)
+[ Edge Device (Raspberry Pi) ]
    - Pulls latest state
-   - Rebuilds cron jobs daily
-   - Executes tasks at exact times
+   - Wipes and rebuilds cron jobs daily
+   - Executes tasks precisely and terminates
 ```
 
 ---
@@ -63,152 +58,72 @@ External APIs + Dynamic Web Players
 ## 🚀 Key Design Decisions
 
 ### 1. Stateless Edge Execution
-
-The Raspberry Pi:
-
-- Holds no persistent logic
-- Stores no sensitive credentials
-- Rebuilds its entire execution plan daily
-
-This makes it:
-
-- Highly reliable
-- Easy to reset/redeploy
-- Resistant to drift or corruption
+The Raspberry Pi holds no persistent logic, stores no sensitive credentials, and rebuilds its entire execution plan daily. This makes the node highly reliable, trivially easy to reset or redeploy, and entirely resistant to state drift.
 
 ### 2. CI/CD as a Compute Layer
-
-Instead of just deploying code, the pipeline:
-
-- Acts as a data processor
-- Runs headless browser automation (Puppeteer)
-- Extracts values that are otherwise inaccessible (SPA/network calls)
+Instead of just deploying code, the GitHub Actions pipeline acts as an active data processor. It runs headless browser automation to extract DOM-level values that are otherwise inaccessible via standard API calls, compiling them into a static artifact.
 
 ### 3. Idempotent Scheduling
+Every day at 2:30 AM, existing execution jobs are safely wiped using targeted process filtering, and a fresh schedule is generated. No duplication, no memory leaks, no hidden state.
 
-Every day:
+### 4. Remote State Configuration
+Every aspect of the edge device's behavior—from the volume of the audio output to granular, per-event timing offsets—is controlled via configuration files in this repository. The edge device requires zero SSH intervention to adjust its behavior.
 
-- Existing cron jobs are wiped safely
-- A fresh schedule is generated
-
-No duplication. No drift. No hidden state.
-
-### 4. Zero Backend, Zero Hosting Cost
-
-- No servers
-- No databases
-- No APIs to maintain
-
-Git becomes the source of truth.
+### 5. Zero Backend, Zero Hosting Cost
+By utilizing GitHub as the state layer and CI/CD for compute, this architecture requires no servers, no databases, and no internal APIs to maintain.
 
 ---
 
 ## 🔧 Core Components
 
-- **`update_prayers.mjs`**
-  - Fetches daily prayer times from external API
-  - Normalizes and stores them as structured JSON
+- **`update_prayers.mjs`**: Fetches daily temporal data from an external API, normalizes it via timezone-aware date formatting, and stores it as structured JSON.
 
-- **`stream_link_retriever.js`**
-  - Uses headless Chromium (Puppeteer)
-  - Navigates dynamic player pages
-  - Extracts ephemeral stream URLs
+- **`stream_link_retriever.js`**: Orchestrates headless Chromium to navigate dynamic Single Page Applications (SPAs), bypass autoplay restrictions, and intercept ephemeral network requests to extract media URLs.
 
-- **GitHub Actions Workflows**
-  - Scheduled automation (CRON)
-  - Runs scraping + data updates
-  - Commits fresh state back to repo
+- **`prayer_stream.sh`**: The edge execution script. Pulls the latest Git state, parses JSON via jq, calculates exact minute-offsets, and injects self-terminating tasks (timeout) into the Linux cron scheduler.
 
-- **`prayer_stream.sh`**
-  - Runs on Raspberry Pi
-  - Pulls latest state
-  - Rebuilds execution schedule
-  - Triggers playback at exact times
-
----
-
-## ⚙️ Why This Matters
-
-This pattern is powerful beyond this use case:
-
-It can be applied to:
-
-- Digital signage systems
-- Smart home automations
-- Event-triggered IoT systems
-- Low-cost distributed devices
-
----
-
-## 🧪 Engineering Principles Applied
-
-- **Separation of concerns** (compute vs execution)
-- **Idempotency** (safe repeated runs)
-- **Stateless design**
-- **Edge reliability over edge intelligence**
-- **Cost minimization without sacrificing capability**
-
----
-
-## 📦 Deployment Philosophy
-
-If the Raspberry Pi dies, replace it — no migration needed.
-
-Setup is intentionally minimal:
-
-1. Flash OS
-2. Add cron job
-3. Done
-
-No secrets. No onboarding complexity.
-
----
-
-## 🔮 Future Extensions
-
-- Multi-location support
-- Redundant edge nodes
-- Real-time fallback streams
-- Web dashboard for monitoring
-- Event-driven (non-cron) triggers
-
----
-
-## 🧩 Final Thought
-
-This project isn’t about prayer times or streaming.
-
-It’s about proving that:
-
-> You don’t need heavy infrastructure to build reliable, real-world systems.
+- **`setup.sh`**: A single-command bootstrapping script for instant edge provisioning.
 
 ---
 
 ## 🛠️ Edge Device Provisioning
 
-The edge device requires zero application-level configuration. Follow these steps to set up the device:
+If an edge node dies, you simply replace it. There is no state to migrate and no secrets to onboard.
 
-### 1. Install System Dependencies
+### Automated Provisioning
 
-Run the following commands to install the required dependencies:
+Run this single command on a fresh Debian/Raspberry Pi OS installation to fully provision the device in under 60 seconds:
+
+```bash
+curl -sL https://github.com/YZAHMED/prayer-times-sync/blob/main/setup.sh | sudo bash
+```
+
+(This automates package installation, pulls the orchestration script, applies executable permissions, and initializes the self-healing cron queue).
+
+### Manual Provisioning Fallback
+
+If you prefer to provision manually:
 
 ```bash
 sudo apt update && sudo apt install curl jq mpv -y
-```
 
-### 2. Download the Provisioning Script
+sudo curl -o /usr/local/bin/prayer_stream.sh https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/prayer_stream.sh
 
-Use the following commands to download and set up the provisioning script:
-
-```bash
-sudo curl -o /usr/local/bin/prayer_stream.sh https://raw.githubusercontent.com/YOUR_REPO/main/prayer_stream.sh
 sudo chmod +x /usr/local/bin/prayer_stream.sh
-```
 
-### 3. Initialize the Self-Healing Local Queue
-
-Run the script once to initialize the local queue:
-
-```bash
 /usr/local/bin/prayer_stream.sh
 ```
+
+---
+
+## 🔮 Future Extensions
+
+- Multi-location support (fleet management via Git branches)
+- Redundant edge nodes
+- Web dashboard for monitoring repository state
+
+---
+
+## 🧩 Final Thought
+
+This project is a proof of concept for a broader engineering philosophy: You do not always need heavy infrastructure to build highly reliable, real-world distributed systems.
