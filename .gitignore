@@ -1,0 +1,35 @@
+
+# Dependencies
+node_modules/
+
+# Environment variables (if you ever add any)
+.env
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# Composer dependencies
+/vendor
+
+# Node dependencies (if compiling frontend assets)
+node_modules/
+public/build/
+public/hot
+public/storage
+storage/*.key
+
+# Environment variables (Critical to ignore)
+.env
+.env.backup
+.env.production
+
+# Mac/Windows system files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# IntelliJ / WebStorm / PhpStorm
+.idea/
