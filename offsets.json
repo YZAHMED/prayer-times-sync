@@ -1,0 +1,8 @@
+{
+  "Fajr": { "pre": 5, "post": 15 },
+  "Dhuhr": { "pre": 5, "post": 15 },
+  "Jumah": { "pre": 10, "post": 20 },
+  "Asr": { "pre": 5, "post": 15 },
+  "Maghrib": { "pre": 2, "post": 10 },
+  "Isha": { "pre": 5, "post": 15 }
+}
