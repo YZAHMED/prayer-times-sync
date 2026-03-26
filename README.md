@@ -1,73 +1,145 @@
-# 📡 Stateless Edge-Stream Orchestrator
+⚡ Stateless Edge Orchestration for Time-Critical Media Streams
 
-[![CI/CD Pipeline](https://img.shields.io/badge/CI%2FCD-GitHub_Actions-blue.svg)](https://github.com/features/actions)
-[![Edge Device](https://img.shields.io/badge/Edge-Raspberry_Pi-C51A4A.svg)](https://www.raspberrypi.org/)
-[![Status](https://img.shields.io/badge/Status-Production_Ready-success.svg)]()
+A production-grade system designed to reliably trigger real-world events based on dynamic, time-sensitive data — without running a traditional backend.
 
-A zero-touch, fault-tolerant automation pipeline designed to orchestrate dynamic media streams on a headless edge device (Raspberry Pi). 
+🧠 The Problem
 
-## 📖 Overview
-Scheduling edge execution based on dynamic, shifting daily data (such as celestial events, dynamic stream URLs, or temporary audio tokens) typically requires deploying heavy, resource-intensive servers directly to the edge. 
+Certain real-world workflows depend on time-critical external data that changes daily:
 
-This project solves that by decoupling the data-aggregation layer from the edge-execution layer. It utilizes a **stateless IoT architecture**: a cloud CI/CD pipeline acts as the heavy-lifting data aggregator and single source of truth, while a lightweight, credential-free edge device handles physical execution.
+Prayer times
+Live stream URLs (ephemeral tokens)
+Event-based triggers tied to external APIs
 
-## 🏗️ System Architecture & Data Flow
+The typical approach:
 
-```text
-[ External API ]      [ Dynamic SPA Web Player ]
-       │                          │
-       ▼                          ▼
-[ GitHub Actions (Ubuntu Runner) ] ──────▶ Runs Headless Chrome (Puppeteer)
-       │ (Daily CRON: Data Aggregation)
-       ▼
-[ Git Repository ] ◀── Updates JSON & TXT Artifacts (State)
-       │
-       ▼
-[ Edge Device (Raspberry Pi) ] ◀── Fetches state via curl
-       │ (Daily CRON: Parsing & Provisioning)
-       ▼
-[ Local Linux Cron ] ──▶ Idempotent execution queue rebuilt daily
-✨ Key Engineering Features
-Headless CI/CD Scraping: Utilizes puppeteer within a GitHub Actions Ubuntu runner to navigate dynamic Single Page Applications (SPAs), bypass autoplay policies, and intercept ephemeral network requests to extract daily stream URLs.
+Run a backend server
+Maintain state
+Handle scheduling + scraping + execution
 
-Idempotent Edge Scheduling: The edge bash script safely wipes and rebuilds the local cron queue daily using precise grep -v filtering, preventing zombie processes and overlapping stream schedules.
+This introduces:
 
-Secure, Credential-Free Edge: API keys and sensitive tokens are injected via GitHub Secrets at the CI/CD level. The edge device only pulls public, sanitized artifacts, entirely eliminating the risk of edge-side secret leakage.
+Infrastructure overhead
+Cost
+Complexity at the edge (especially on low-power devices)
+💡 The Approach
 
-Remote State Management: System configurations (like hardware volume levels) are managed as code in the cloud repository and dynamically applied at the edge, allowing remote administration without SSH access.
+This project rethinks the architecture completely:
 
-Self-Healing & Fault Tolerance: System reboots or power failures trigger a recovery protocol (@reboot cron directive) that delays execution until the network resolves, then automatically reconstructs the day's remaining schedule.
+Move intelligence to the cloud. Keep the edge dumb, reliable, and stateless.
 
-Process Isolation: Utilizes the native Linux timeout utility to guarantee stream termination based on dynamically calculated minute-offsets, ensuring system resources are always freed.
+Instead of running logic on the device:
 
-💻 Tech Stack
-Cloud Worker / Automation: Node.js (ES6), Puppeteer, GitHub Actions.
+All heavy computation, scraping, and data preparation happens in CI/CD
+The edge device becomes a pure executor of precomputed state
+🏗️ Architecture (High-Level)
+External APIs + Dynamic Web Players
+            ↓
+   CI/CD Pipeline (GitHub Actions)
+   - Scrapes dynamic content (Puppeteer)
+   - Extracts stream URLs
+   - Computes daily schedule
+            ↓
+      Git Repository (State Layer)
+   - prayers.json
+   - stream_url.txt
+   - volume.txt
+            ↓
+   Edge Device (Raspberry Pi)
+   - Pulls latest state
+   - Rebuilds cron jobs daily
+   - Executes tasks at exact times
+🚀 Key Design Decisions
+1. Stateless Edge Execution
 
-Edge Scripting: Advanced Bash, jq (JSON parsing), curl.
+The Raspberry Pi:
 
-Execution Environment: Linux cron, mpv (with --af=loudnorm for native audio compression/normalization).
+Holds no persistent logic
+Stores no sensitive credentials
+Rebuilds its entire execution plan daily
 
-🚀 Deployment
-1. Cloud Infrastructure Setup
-Fork this repository.
+This makes it:
 
-Add your external API keys to GitHub Secrets (e.g., PRAYER_API_KEY).
+Highly reliable
+Easy to reset/redeploy
+Resistant to drift or corruption
+2. CI/CD as a Compute Layer
 
-Enable GitHub Actions. The workflow will automatically generate and commit prayers.json, stream_url.txt, and volume.txt daily.
+Instead of just deploying code, the pipeline:
 
-2. Edge Device Provisioning (Raspberry Pi)
-The edge device requires zero application-level configuration.
+Acts as a data processor
+Runs headless browser automation (Puppeteer)
+Extracts values that are otherwise inaccessible (SPA/network calls)
+3. Idempotent Scheduling
 
-Install system dependencies:
+Every day:
 
-Bash
-sudo apt update && sudo apt install curl jq mpv -y
-Download the provisioning script:
+Existing cron jobs are wiped safely
+A fresh schedule is generated
 
-Bash
-sudo curl -o /usr/local/bin/prayer_stream.sh [https://raw.githubusercontent.com/YOUR_REPO/main/prayer_stream.sh](https://raw.githubusercontent.com/YOUR_REPO/main/prayer_stream.sh)
-sudo chmod +x /usr/local/bin/prayer_stream.sh
-Run the script once to initialize the self-healing local queue:
+No duplication. No drift. No hidden state.
 
-Bash
-/usr/local/bin/prayer_stream.sh
+4. Zero Backend, Zero Hosting Cost
+No servers
+No databases
+No APIs to maintain
+
+Git becomes the source of truth.
+
+🔧 Core Components
+🔹 update_prayers.mjs
+Fetches daily prayer times from external API
+Normalizes and stores them as structured JSON
+🔹 stream_link_retriever.js
+Uses headless Chromium (Puppeteer)
+Navigates dynamic player pages
+Extracts ephemeral stream URLs
+🔹 GitHub Actions Workflows
+Scheduled automation (CRON)
+Runs scraping + data updates
+Commits fresh state back to repo
+🔹 prayer_stream.sh
+Runs on Raspberry Pi
+Pulls latest state
+Rebuilds execution schedule
+Triggers playback at exact times
+⚙️ Why This Matters
+
+This pattern is powerful beyond this use case:
+
+It can be applied to:
+
+Digital signage systems
+Smart home automations
+Event-triggered IoT systems
+Low-cost distributed devices
+🧪 Engineering Principles Applied
+Separation of concerns (compute vs execution)
+Idempotency (safe repeated runs)
+Stateless design
+Edge reliability over edge intelligence
+Cost minimization without sacrificing capability
+📦 Deployment Philosophy
+
+If the Raspberry Pi dies, replace it — no migration needed.
+
+Setup is intentionally minimal:
+
+Flash OS
+Add cron job
+Done
+
+No secrets. No onboarding complexity.
+
+🔮 Future Extensions
+Multi-location support
+Redundant edge nodes
+Real-time fallback streams
+Web dashboard for monitoring
+Event-driven (non-cron) triggers
+🧩 Final Thought
+
+This project isn’t about prayer times or streaming.
+
+It’s about proving that:
+
+You don’t need heavy infrastructure to build reliable, real-world systems.
