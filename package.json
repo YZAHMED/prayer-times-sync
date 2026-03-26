@@ -1,24 +1,24 @@
-{
-  "name": "prayer-times-sync",
-  "version": "1.0.0",
-  "description": "[![CI/CD Pipeline](https://img.shields.io/badge/CI%2FCD-GitHub_Actions-blue.svg)](https://github.com/features/actions) [![Edge Device](https://img.shields.io/badge/Edge-Raspberry_Pi-C51A4A.svg)](https://www.raspberrypi.org/) [![Status](https://img.shields.io/badge/Status-Production_Ready-success.svg)]()",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/YZAHMED/prayer-times-sync.git"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
-  "bugs": {
-    "url": "https://github.com/YZAHMED/prayer-times-sync/issues"
-  },
-  "homepage": "https://github.com/YZAHMED/prayer-times-sync#readme",
-  "dependencies": {
-    "puppeteer": "^24.40.0"
+  {
+    "name": "prayer-times-sync",
+    "version": "1.0.0",
+    "description": "[![CI/CD Pipeline](https://img.shields.io/badge/CI%2FCD-GitHub_Actions-blue.svg)](https://github.com/features/actions) [![Edge Device](https://img.shields.io/badge/Edge-Raspberry_Pi-C51A4A.svg)](https://www.raspberrypi.org/) [![Status](https://img.shields.io/badge/Status-Production_Ready-success.svg)]()",
+    "main": "index.js",
+    "scripts": {
+      "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "repository": {
+      "type": "git",
+      "url": "git+https://github.com/YZAHMED/prayer-times-sync.git"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "type": "module",
+    "bugs": {
+      "url": "https://github.com/YZAHMED/prayer-times-sync/issues"
+    },
+    "homepage": "https://github.com/YZAHMED/prayer-times-sync#readme",
+    "dependencies": {
+      "puppeteer": "^24.40.0"
+    }
   }
-}

@@ -1,47 +1,73 @@
-# 🕌 Automated Edge-Stream Scheduler
+# 📡 Stateless Edge-Stream Orchestrator
 
 [![CI/CD Pipeline](https://img.shields.io/badge/CI%2FCD-GitHub_Actions-blue.svg)](https://github.com/features/actions)
 [![Edge Device](https://img.shields.io/badge/Edge-Raspberry_Pi-C51A4A.svg)](https://www.raspberrypi.org/)
 [![Status](https://img.shields.io/badge/Status-Production_Ready-success.svg)]()
 
-A zero-touch, fault-tolerant automation pipeline designed to synchronize dynamic, daily schedules from a remote API and trigger precise audio streams on a headless edge device (Raspberry Pi). 
+A zero-touch, fault-tolerant automation pipeline designed to orchestrate dynamic media streams on a headless edge device (Raspberry Pi). 
 
 ## 📖 Overview
-Scheduling media streams based on static times is simple, but scheduling them based on dynamically shifting daily data (like celestial events or prayer times) typically requires heavy, resource-intensive servers. 
+Scheduling edge execution based on dynamic, shifting daily data (such as celestial events, dynamic stream URLs, or temporary audio tokens) typically requires deploying heavy, resource-intensive servers directly to the edge. 
 
-This project solves that by decoupling the data-fetching logic from the execution logic. It utilizes a **stateless architecture** where a cloud CI/CD pipeline acts as the single source of truth, and a lightweight edge device handles the physical execution.
+This project solves that by decoupling the data-aggregation layer from the edge-execution layer. It utilizes a **stateless IoT architecture**: a cloud CI/CD pipeline acts as the heavy-lifting data aggregator and single source of truth, while a lightweight, credential-free edge device handles physical execution.
 
-## 🏗️ Architecture & Data Flow
+## 🏗️ System Architecture & Data Flow
 
-1. **Cloud Synchronization (GitHub Actions):** A scheduled cloud runner wakes up daily at 2:00 AM EST, securely authenticates with the remote API, parses the JSON payload, and commits the updated schedule to this repository as a static artifact.
-2. **Edge Provisioning (Raspberry Pi):** At 2:30 AM EST, the local edge device pulls the latest static artifact, avoiding the need to store API secrets locally.
-3. **Dynamic Task Queueing:** A local parsing script calculates precise start and stop offsets, clears stale jobs, and injects the new stream tasks into the Linux `cron` scheduler.
-4. **Resilience / Self-Healing:** System reboots or power failures trigger a recovery protocol (`@reboot` cron directive) that delays execution until network connectivity is restored, then automatically reconstructs the day's remaining schedule.
+```text
+[ External API ]      [ Dynamic SPA Web Player ]
+       │                          │
+       ▼                          ▼
+[ GitHub Actions (Ubuntu Runner) ] ──────▶ Runs Headless Chrome (Puppeteer)
+       │ (Daily CRON: Data Aggregation)
+       ▼
+[ Git Repository ] ◀── Updates JSON & TXT Artifacts (State)
+       │
+       ▼
+[ Edge Device (Raspberry Pi) ] ◀── Fetches state via curl
+       │ (Daily CRON: Parsing & Provisioning)
+       ▼
+[ Local Linux Cron ] ──▶ Idempotent execution queue rebuilt daily
+✨ Key Engineering Features
+Headless CI/CD Scraping: Utilizes puppeteer within a GitHub Actions Ubuntu runner to navigate dynamic Single Page Applications (SPAs), bypass autoplay policies, and intercept ephemeral network requests to extract daily stream URLs.
 
-## ✨ Key Features
-* **Zero-Touch Operation:** Once deployed, the system requires zero human intervention to maintain daily accuracy.
-* **Fault-Tolerant:** Survives unexpected power outages and automatically rebuilds its own execution queue upon reboot.
-* **Secure Secrets Management:** API keys are injected via GitHub Secrets at runtime, keeping the edge device and public repository completely credential-free.
-* **Audio Normalization:** Implements native `mpv` audio filters (`--af=loudnorm`) to compress and normalize live audio streams for consistent hardware output.
-* **Zombie Process Prevention:** Utilizes the Linux `timeout` utility to guarantee stream termination, preventing overlapping or hanging background processes.
+Idempotent Edge Scheduling: The edge bash script safely wipes and rebuilds the local cron queue daily using precise grep -v filtering, preventing zombie processes and overlapping stream schedules.
 
-## 💻 Tech Stack
-* **JavaScript / Node.js (Cloud Worker):** Handles asynchronous API fetching and timezone-aware date formatting. 
-* **Bash (Edge Scripting):** Native Linux shell scripting for parsing (`jq`), downloading (`curl`), and scheduling.
-* **GitHub Actions (CI/CD):** Serverless automation and cron scheduling.
-* **Linux / Cron:** Core operating system scheduling and process management.
+Secure, Credential-Free Edge: API keys and sensitive tokens are injected via GitHub Secrets at the CI/CD level. The edge device only pulls public, sanitized artifacts, entirely eliminating the risk of edge-side secret leakage.
 
-## 🚀 Deployment
+Remote State Management: System configurations (like hardware volume levels) are managed as code in the cloud repository and dynamically applied at the edge, allowing remote administration without SSH access.
 
-### Cloud Setup
-1. Fork this repository.
-2. Add your API key to GitHub Secrets as `PRAYER_API_KEY`.
-3. Enable GitHub Actions. The workflow will automatically generate `prayers.json` daily.
+Self-Healing & Fault Tolerance: System reboots or power failures trigger a recovery protocol (@reboot cron directive) that delays execution until the network resolves, then automatically reconstructs the day's remaining schedule.
 
-### Edge Device Setup (Raspberry Pi)
-1. Install dependencies: `sudo apt install curl jq mpv`
-2. Download the edge script:
-   ```bash
-   sudo curl -o /usr/local/bin/prayer_stream.sh [https://raw.githubusercontent.com/YOUR_REPO/main/prayer_stream.sh](https://raw.githubusercontent.com/YOUR_REPO/main/prayer_stream.sh)
-   sudo chmod +x /usr/local/bin/prayer_stream.sh
-Run the script once to initialize the self-healing cron schedule: /usr/local/bin/prayer_stream.sh
+Process Isolation: Utilizes the native Linux timeout utility to guarantee stream termination based on dynamically calculated minute-offsets, ensuring system resources are always freed.
+
+💻 Tech Stack
+Cloud Worker / Automation: Node.js (ES6), Puppeteer, GitHub Actions.
+
+Edge Scripting: Advanced Bash, jq (JSON parsing), curl.
+
+Execution Environment: Linux cron, mpv (with --af=loudnorm for native audio compression/normalization).
+
+🚀 Deployment
+1. Cloud Infrastructure Setup
+Fork this repository.
+
+Add your external API keys to GitHub Secrets (e.g., PRAYER_API_KEY).
+
+Enable GitHub Actions. The workflow will automatically generate and commit prayers.json, stream_url.txt, and volume.txt daily.
+
+2. Edge Device Provisioning (Raspberry Pi)
+The edge device requires zero application-level configuration.
+
+Install system dependencies:
+
+Bash
+sudo apt update && sudo apt install curl jq mpv -y
+Download the provisioning script:
+
+Bash
+sudo curl -o /usr/local/bin/prayer_stream.sh [https://raw.githubusercontent.com/YOUR_REPO/main/prayer_stream.sh](https://raw.githubusercontent.com/YOUR_REPO/main/prayer_stream.sh)
+sudo chmod +x /usr/local/bin/prayer_stream.sh
+Run the script once to initialize the self-healing local queue:
+
+Bash
+/usr/local/bin/prayer_stream.sh
