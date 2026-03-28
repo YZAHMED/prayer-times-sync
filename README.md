@@ -1,6 +1,12 @@
-# ⚡ Stateless Edge Orchestration for Time-Critical Media Streams
+# Prayer Times Sync
 
-A production-grade system designed to reliably trigger real-world events based on dynamic, time-sensitive data — without running a traditional backend.
+## Table of Contents
+- [The Problem](#-the-problem)
+- [The Architecture](#-the-architecture)
+- [Key Design Decisions](#-key-design-decisions)
+- [Core Components](#-core-components)
+- [Edge Device Provisioning](#️-edge-device-provisioning)
+- [Future Extensions](#-future-extensions)
 
 ---
 
@@ -95,7 +101,7 @@ If an edge node dies, you simply replace it. There is no state to migrate and no
 Run this single command on a fresh Debian/Raspberry Pi OS installation to fully provision the device in under 60 seconds:
 
 ```bash
-curl -sL https://github.com/YZAHMED/prayer-times-sync/blob/main/setup.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/setup.sh | sudo bash
 ```
 
 (This automates package installation, pulls the orchestration script, applies executable permissions, and initializes the self-healing cron queue).
@@ -127,3 +133,30 @@ sudo chmod +x /usr/local/bin/prayer_stream.sh
 ## 🧩 Final Thought
 
 This project is a proof of concept for a broader engineering philosophy: You do not always need heavy infrastructure to build highly reliable, real-world distributed systems.
+
+## Installation
+
+Run the following command to install the setup script:
+
+```bash
+curl -sL https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/setup.sh | sudo bash
+```
+
+## Setting Up Secrets
+
+This project requires the following secrets to fetch prayer times:
+- `PRAYER_API_KEY`: Your API key for the prayer times service.
+- `PRAYER_API_BASE_URL`: The base URL for the API.
+
+To add these secrets:
+1. Go to your repository on GitHub.
+2. Navigate to **Settings > Secrets and variables > Actions**.
+3. Add the required secrets.
+
+## Troubleshooting Puppeteer
+
+If you encounter issues with Puppeteer, ensure the following dependencies are installed:
+
+```bash
+sudo apt-get install -y libnss3 libatk1.0-0 libx11-xcb1 libxcomposite1 libxrandr2 libxdamage1 libgbm1 libasound2
+```

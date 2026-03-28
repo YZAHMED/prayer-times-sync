@@ -17,4 +17,29 @@ Before running the installation script, ensure your Raspberry Pi has already pai
 You can install and configure the service in one single command. Run this in your Raspberry Pi terminal:
 
 ```bash
-curl -sSL [https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME/main/install.sh](https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/YOUR_REPO_NAME/main/install.sh) | sudo bash
+curl -sSL https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/bluetooth-config/install.sh | sudo bash
+```
+
+## Verifying the Service
+
+After installation, verify that the service is running:
+
+```bash
+sudo systemctl status connect-speaker.service
+```
+
+If the service is not running, check the logs:
+
+```bash
+sudo journalctl -u connect-speaker.service
+```
+
+## Dependencies
+
+Ensure the following dependencies are installed:
+
+```bash
+sudo apt-get install -y bluetooth bluez
+```
+
+
