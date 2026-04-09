@@ -7,93 +7,93 @@
     "updateAfterSunset": true,
     "prayers": null,
     "prayerOfDay": {
-      "prayerDate": "2026-04-08T00:00:00",
+      "prayerDate": "2026-04-09T00:00:00",
       "hasThirtyDays": false,
       "updateAfterSunset": false,
       "hijriDate": {
-        "day": 20,
+        "day": 21,
         "month": 10,
         "year": 1447
       },
-      "dayOfWeek": 3,
+      "dayOfWeek": 4,
       "singlePrayers": [
         {
           "prayerName": "Fajr",
-          "prayerBegins": "05:25:00",
+          "prayerBegins": "05:23:00",
           "prayerAdhan": "05:50:00",
           "prayerIqamah": "06:00:00"
         },
         {
           "prayerName": "Sunrise",
           "prayerBegins": null,
-          "prayerAdhan": "06:47:00",
+          "prayerAdhan": "06:46:00",
           "prayerIqamah": null
         },
         {
           "prayerName": "Zawal",
-          "prayerBegins": "13:20:00",
-          "prayerAdhan": "13:20:00",
-          "prayerIqamah": "13:20:00"
+          "prayerBegins": "13:19:00",
+          "prayerAdhan": "13:19:00",
+          "prayerIqamah": "13:19:00"
         },
         {
           "prayerName": "Dhuhr",
-          "prayerBegins": "13:20:00",
+          "prayerBegins": "13:19:00",
           "prayerAdhan": "13:35:00",
           "prayerIqamah": "13:45:00"
         },
         {
           "prayerName": "Asr",
-          "prayerBegins": "17:56:00",
+          "prayerBegins": "17:57:00",
           "prayerAdhan": "18:05:00",
           "prayerIqamah": "18:15:00"
         },
         {
           "prayerName": "Sunset",
           "prayerBegins": null,
-          "prayerAdhan": "19:53:00",
+          "prayerAdhan": "19:54:00",
           "prayerIqamah": null
         },
         {
           "prayerName": "Maghrib",
-          "prayerBegins": "19:53:00",
-          "prayerAdhan": "19:55:00",
-          "prayerIqamah": "19:58:00"
+          "prayerBegins": "19:54:00",
+          "prayerAdhan": "19:56:00",
+          "prayerIqamah": "19:59:00"
         },
         {
           "prayerName": "Isha",
-          "prayerBegins": "21:16:00",
+          "prayerBegins": "21:17:00",
           "prayerAdhan": "21:20:00",
           "prayerIqamah": "21:30:00"
         },
         {
           "prayerName": "Jumah",
-          "prayerBegins": "13:20:00",
+          "prayerBegins": "13:19:00",
           "prayerAdhan": "13:30:00",
           "prayerIqamah": "14:00:00"
         },
         {
           "prayerName": "Al-Duha",
           "prayerBegins": null,
-          "prayerAdhan": "06:47:00",
-          "prayerIqamah": "13:20:00"
+          "prayerAdhan": "06:46:00",
+          "prayerIqamah": "13:19:00"
         },
         {
           "prayerName": "FirstThirdofNight",
           "prayerBegins": null,
-          "prayerAdhan": "19:53:00",
+          "prayerAdhan": "19:54:00",
           "prayerIqamah": "23:03:40"
         },
         {
           "prayerName": "IslamicMidnight",
-          "prayerBegins": "1.00:39:00",
+          "prayerBegins": "1.00:38:30",
           "prayerAdhan": null,
           "prayerIqamah": null
         },
         {
           "prayerName": "LastThirdofNight",
           "prayerBegins": null,
-          "prayerAdhan": "02:14:20",
-          "prayerIqamah": "05:25:00"
+          "prayerAdhan": "02:13:20",
+          "prayerIqamah": "05:23:00"
         }
       ]
     }
