@@ -7,15 +7,15 @@
     "updateAfterSunset": true,
     "prayers": null,
     "prayerOfDay": {
-      "prayerDate": "2026-06-22T00:00:00",
+      "prayerDate": "2026-06-23T00:00:00",
       "hasThirtyDays": false,
       "updateAfterSunset": false,
       "hijriDate": {
-        "day": 7,
+        "day": 8,
         "month": 1,
         "year": 1448
       },
-      "dayOfWeek": 1,
+      "dayOfWeek": 2,
       "singlePrayers": [
         {
           "prayerName": "Fajr",
@@ -26,7 +26,7 @@
         {
           "prayerName": "Sunrise",
           "prayerBegins": null,
-          "prayerAdhan": "05:36:00",
+          "prayerAdhan": "05:37:00",
           "prayerIqamah": null
         },
         {
@@ -74,7 +74,7 @@
         {
           "prayerName": "Al-Duha",
           "prayerBegins": null,
-          "prayerAdhan": "05:36:00",
+          "prayerAdhan": "05:37:00",
           "prayerIqamah": "13:20:00"
         },
         {
