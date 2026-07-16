@@ -7,26 +7,26 @@
     "updateAfterSunset": true,
     "prayers": null,
     "prayerOfDay": {
-      "prayerDate": "2026-07-15T00:00:00",
+      "prayerDate": "2026-07-16T00:00:00",
       "hasThirtyDays": false,
       "updateAfterSunset": false,
       "hijriDate": {
-        "day": 30,
-        "month": 1,
+        "day": 1,
+        "month": 2,
         "year": 1448
       },
-      "dayOfWeek": 3,
+      "dayOfWeek": 4,
       "singlePrayers": [
         {
           "prayerName": "Fajr",
-          "prayerBegins": "04:06:00",
+          "prayerBegins": "04:07:00",
           "prayerAdhan": "04:50:00",
           "prayerIqamah": "05:00:00"
         },
         {
           "prayerName": "Sunrise",
           "prayerBegins": null,
-          "prayerAdhan": "05:50:00",
+          "prayerAdhan": "05:51:00",
           "prayerIqamah": null
         },
         {
@@ -61,9 +61,9 @@
         },
         {
           "prayerName": "Isha",
-          "prayerBegins": "22:42:00",
-          "prayerAdhan": "22:35:00",
-          "prayerIqamah": "22:45:00"
+          "prayerBegins": "22:40:00",
+          "prayerAdhan": "22:30:00",
+          "prayerIqamah": "22:40:00"
         },
         {
           "prayerName": "Jumah",
@@ -74,26 +74,26 @@
         {
           "prayerName": "Al-Duha",
           "prayerBegins": null,
-          "prayerAdhan": "05:50:00",
+          "prayerAdhan": "05:51:00",
           "prayerIqamah": "13:24:00"
         },
         {
           "prayerName": "FirstThirdofNight",
           "prayerBegins": null,
           "prayerAdhan": "20:57:00",
-          "prayerIqamah": "23:20:00"
+          "prayerIqamah": "23:20:20"
         },
         {
           "prayerName": "IslamicMidnight",
-          "prayerBegins": "1.00:31:30",
+          "prayerBegins": "1.00:32:00",
           "prayerAdhan": null,
           "prayerIqamah": null
         },
         {
           "prayerName": "LastThirdofNight",
           "prayerBegins": null,
-          "prayerAdhan": "01:43:00",
-          "prayerIqamah": "04:06:00"
+          "prayerAdhan": "01:43:40",
+          "prayerIqamah": "04:07:00"
         }
       ]
     }
