@@ -1,162 +1,272 @@
-# Prayer Times Sync
+# prayer-times-sync
 
-## Table of Contents
-- [The Problem](#-the-problem)
-- [The Architecture](#-the-architecture)
-- [Key Design Decisions](#-key-design-decisions)
-- [Core Components](#-core-components)
-- [Edge Device Provisioning](#️-edge-device-provisioning)
-- [Future Extensions](#-future-extensions)
+Plays a mosque's live stream through a speaker at prayer time, every day, without supervision.
 
----
+The cloud does the thinking (fetch the timetable, publish it to this repo). The edge device just plays. If the cloud, the network, or the mosque's API disappears, the device keeps working on its own.
 
-## 🧠 The Problem
-
-Certain real-world workflows depend on time-critical external data that changes daily:
-
-* **Prayer times** or celestial events
-* **Live stream URLs** (ephemeral tokens)
-* **Event-based triggers** tied to external APIs
-
-### The Typical Approach
-1. Run a backend server on the edge device.
-2. Maintain local state and secrets.
-3. Handle scheduling, web scraping, and execution simultaneously.
-
-### The Bottleneck
-This introduces unnecessary infrastructure overhead, ongoing hosting costs, and complexity at the edge—especially when deploying to low-power IoT devices that are prone to power loss or SD card corruption.
-
----
-
-## 💡 The Architecture
-
-This project rethinks the architecture completely by decoupling data aggregation from physical execution:
-
-* **Move intelligence to the cloud.** Keep the edge dumb, reliable, and stateless.
-* Instead of running complex logic on the device:
-  * All heavy computation, scraping, and data preparation happens in a CI/CD pipeline.
-  * The edge device acts strictly as a pure executor of precomputed state.
-
-### High-Level Data Flow
-
-```plaintext
-[ External APIs + Dynamic Web Players ]
-            ↓
-[ CI/CD Pipeline (GitHub Actions) ]
-   - Scrapes dynamic content via headless Chromium (Puppeteer)
-   - Extracts ephemeral stream URLs
-   - Computes daily scheduling offsets
-            ↓
-[ Git Repository (State Layer) ]
-   - prayers.json (Core Data)
-   - offsets.json (Granular Timing Logic)
-   - stream_url.txt (Media Target)
-   - volume.txt (Hardware State)
-            ↓
-[ Edge Device (Raspberry Pi) ]
-   - Pulls latest state
-   - Wipes and rebuilds cron jobs daily
-   - Executes tasks precisely and terminates
+```
+     Mosque timetable API                     Mixlr API
+              │                                   │
+              ▼                                   │
+     GitHub Actions (daily)                       │
+              │  prayers.json                     │
+              ▼                                   │
+     This repository ─────────────────┐           │
+              │                       │           │
+              ▼                       ▼           ▼
+     ┌──────────────────────────────────────────────────┐
+     │  Edge device: prayer-sync                        │
+     │    • pulls the timetable once a day              │
+     │    • resolves the stream URL AT PLAY TIME        │
+     │    • computes prayer times locally if offline    │
+     │    • plays to Bluetooth / 3.5 mm / USB / HDMI    │
+     └──────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🚀 Key Design Decisions
+## Install
 
-### 1. Stateless Edge Execution
-The Raspberry Pi holds no persistent logic, stores no sensitive credentials, and rebuilds its entire execution plan daily. This makes the node highly reliable, trivially easy to reset or redeploy, and entirely resistant to state drift.
-
-### 2. CI/CD as a Compute Layer
-Instead of just deploying code, the GitHub Actions pipeline acts as an active data processor. It runs headless browser automation to extract DOM-level values that are otherwise inaccessible via standard API calls, compiling them into a static artifact.
-
-### 3. Idempotent Scheduling
-Every day at 2:30 AM, existing execution jobs are safely wiped using targeted process filtering, and a fresh schedule is generated. No duplication, no memory leaks, no hidden state.
-
-### 4. Remote State Configuration
-Every aspect of the edge device's behavior—from the volume of the audio output to granular, per-event timing offsets—is controlled via configuration files in this repository. The edge device requires zero SSH intervention to adjust its behavior.
-
-### 5. Zero Backend, Zero Hosting Cost
-By utilizing GitHub as the state layer and CI/CD for compute, this architecture requires no servers, no databases, and no internal APIs to maintain.
-
----
-
-## 🔧 Core Components
-
-- **`update_prayers.mjs`**: Fetches daily temporal data from an external API, normalizes it via timezone-aware date formatting, and stores it as structured JSON.
-
-- **`stream_link_retriever.js`**: Orchestrates headless Chromium to navigate dynamic Single Page Applications (SPAs), bypass autoplay restrictions, and intercept ephemeral network requests to extract media URLs.
-
-- **`prayer_stream.sh`**: The edge execution script. Pulls the latest Git state, parses JSON via jq, calculates exact minute-offsets, and injects self-terminating tasks (timeout) into the Linux cron scheduler.
-
-- **`setup.sh`**: A single-command bootstrapping script for instant edge provisioning.
-
----
-
-## 🛠️ Edge Device Provisioning
-
-If an edge node dies, you simply replace it. There is no state to migrate and no secrets to onboard.
-
-### Automated Provisioning
-
-Run this single command on a fresh Debian/Raspberry Pi OS installation to fully provision the device in under 60 seconds:
+On a fresh Raspberry Pi OS, Debian, Ubuntu, Proxmox LXC, Fedora, Arch or Alpine box:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/install.sh | sudo sh
 ```
 
-(This automates package installation, pulls the orchestration script, applies executable permissions, and initializes the self-healing cron queue).
-
-### Manual Provisioning Fallback
-
-If you prefer to provision manually:
+With options:
 
 ```bash
-sudo apt update && sudo apt install curl jq mpv -y
+curl -fsSL .../install.sh | sudo sh -s -- \
+  --mosque masjid-el-noor \
+  --output aux \
+  --volume 85 \
+  --bluetooth 41:42:8C:C6:B2:80
+```
 
-sudo curl -o /usr/local/bin/prayer_stream.sh https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/prayer_stream.sh
+| Flag | Meaning |
+| --- | --- |
+| `--mosque NAME` | which preset in [mosques/](mosques/) to use |
+| `--output MODE` | `auto`, `bluetooth`, `aux`, `hdmi`, `usb`, or an exact device id |
+| `--volume N` | 0–100 |
+| `--bluetooth MAC` | pair, trust and connect a speaker |
+| `--user NAME` | account that owns the sound server (auto-detected) |
+| `--no-service` | install files only, don't start anything |
+| `--uninstall` | remove everything |
 
-sudo chmod +x /usr/local/bin/prayer_stream.sh
+The installer detects the package manager, the init system, and which user owns PulseAudio/PipeWire; installs a systemd unit (or OpenRC, or a cron fallback); removes any v1 install; and finishes by printing a health report.
 
-/usr/local/bin/prayer_stream.sh
+Verify:
+
+```bash
+prayer-sync doctor        # full health check
+prayer-sync today         # what will play today
+prayer-sync test-audio    # play the live stream for 15 seconds, now
 ```
 
 ---
 
-## 🔮 Future Extensions
+## Configuring it
 
-- Multi-location support (fleet management via Git branches)
-- Redundant edge nodes
-- Web dashboard for monitoring repository state
+Three layers, each overriding the one above:
+
+| File | Scope | Refreshed from the repo? |
+| --- | --- | --- |
+| `mosques/<name>.json` | the mosque | yes |
+| `config.json` | the whole fleet | yes |
+| `/etc/prayer-sync/config.local.json` | this one device | **never** |
+
+Edit `config.json` here, commit, and every device picks it up at its next refresh. Put anything device-specific (which speaker, which volume) in `config.local.json` so a refresh can't overwrite it.
+
+### When the stream opens and closes
+
+`offsets` decides, per prayer, how long before the adhan the stream opens and how long after the iqamah it closes:
+
+```json
+"offsets": {
+  "default": { "pre": 5,  "post": 15 },
+  "Maghrib": { "pre": 2,  "post": 10 },
+  "Jumah":   { "pre": 10, "post": 20 }
+}
+```
+
+`pre` is minutes before `schedule.start_anchor`, `post` is minutes after `schedule.stop_anchor`. Change which fields those anchor to if you'd rather bracket the *begins* time than the *adhan* time:
+
+```json
+"schedule": {
+  "start_anchor": "prayerAdhan",
+  "stop_anchor":  "prayerIqamah",
+  "prayers": ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"],
+  "jumah_replaces_dhuhr": true,
+  "jumah_weekday": 5,
+  "refresh_at": "02:30",
+  "max_window_minutes": 90
+}
+```
+
+`max_window_minutes` is a safety cap: if the feed ever returns nonsense, the stream still can't run all day. A window that would end after midnight is carried into the next day rather than being cut off at 23:59.
+
+To silence everything overnight regardless of schedule:
+
+```json
+"quiet_hours": { "enabled": true, "from": "23:30", "to": "04:30" }
+```
 
 ---
 
-## 🧩 Final Thought
+## Swapping or adding a mosque
 
-This project is a proof of concept for a broader engineering philosophy: You do not always need heavy infrastructure to build highly reliable, real-world distributed systems.
+A mosque is one file in [mosques/](mosques/):
 
-## Installation
-
-Run the following command to install the setup script:
-
-```bash
-curl -sL https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main/setup.sh | sudo bash
+```json
+{
+  "id": "masjid-el-noor",
+  "name": "Masjid-El-Noor",
+  "timezone": "America/Toronto",
+  "location": { "latitude": 43.6893245, "longitude": -79.4718826, "elevation": 0 },
+  "stream":    { "provider": "mixlr", "mixlr_slug": "masjid-el-noor" },
+  "timetable": { "provider": "masjidal", "masjid_id": 11 },
+  "calculation": { "method": "ISNA", "asr": "hanafi", "high_latitude": "angle_based" }
+}
 ```
 
-## Setting Up Secrets
+Then point at it with `"mosque": "<id>"` in `config.json`, or per device with `--mosque`.
 
-This project requires the following secrets to fetch prayer times:
-- `PRAYER_API_KEY`: Your API key for the prayer times service.
-- `PRAYER_API_BASE_URL`: The base URL for the API.
+**Stream providers.** `mixlr` (resolved live from Mixlr's API — just give the slug from `https://<slug>.mixlr.com`), or `static` with a direct `url` for any Icecast/SHOUTcast/MP3 stream.
 
-To add these secrets:
-1. Go to your repository on GitHub.
-2. Navigate to **Settings > Secrets and variables > Actions**.
-3. Add the required secrets.
+**Timetable providers.** `masjidal` uses the mosque's own iqamah times and needs the two repo secrets. `aladhan` needs no account at all — it computes from the coordinates you supply, so a new mosque can be added with zero credentials. Iqamah times aren't available there, so the device assumes `offline.assumed_iqamah_gap_minutes` after the adhan.
 
-## Troubleshooting Puppeteer
+**Calculation methods:** `ISNA`, `MWL`, `EGYPT`, `KARACHI`, `MAKKAH`, `TEHRAN`, `JAFARI`, or set `fajr_angle` / `isha_angle` explicitly. `asr` is `standard` or `hanafi`.
 
-If you encounter issues with Puppeteer, ensure the following dependencies are installed:
+> Masjid-El-Noor uses **Hanafi** Asr — confirmed by comparing against their published times, where standard Asr was 53 minutes off and Hanafi was 33 seconds off.
+
+---
+
+## Audio: Bluetooth *and* 3.5 mm
+
+Outputs are discovered at play time and tried in order until one genuinely produces sound:
+
+```json
+"audio": {
+  "output": "auto",
+  "priority": ["bluetooth", "aux", "usb", "hdmi", "default"],
+  "bluetooth_mac": "41:42:8C:C6:B2:80",
+  "volume": 100,
+  "normalize": true
+}
+```
+
+- `auto` walks `priority`. Bluetooth is only offered if the speaker actually connects (with `rfkill unblock` and a reconnect attempt first), so a speaker that's off or out of range falls through to the 3.5 mm jack instead of playing into a dead sink.
+- `"output": "aux"` forces the headphone jack, and on older Raspberry Pi kernels also flips the analog/HDMI routing switch. It still falls back to other outputs unless you set `"strict_output": true`.
+- ALSA controls are **unmuted before every prayer** — a muted mixer is the most common cause of "everything looks right but there's no sound".
+- `"extra_args"` passes flags straight to mpv for unusual hardware, e.g. `"--ao=alsa --audio-channels=stereo"`.
 
 ```bash
-sudo apt-get install -y libnss3 libatk1.0-0 libx11-xcb1 libxcomposite1 libxrandr2 libxdamage1 libgbm1 libasound2
+prayer-sync devices     # what's detected, and the order it will be tried
 ```
+
+---
+
+## Moving between machines
+
+The same code runs on a Raspberry Pi today and a Proxmox container tomorrow. Two files, two jobs:
+
+| File | Language | Responsibility |
+| --- | --- | --- |
+| `edge/prayer-sync` | POSIX `sh` | supervise the player, pick and verify an audio output, Bluetooth, signals, service lifecycle |
+| `edge/prayer_sync_core.py` | Python 3.9+ | config merge, JSON, timetable parsing, prayer-time maths, window computation |
+
+That split is deliberate. **Every portability bug this project hit came from awk** — mawk (the default on Raspberry Pi OS and Debian) has no `{n,m}` regex intervals and no `0x` constants, and `%c` differs across awks and locales. Each one was invisible except on the exact target build, and one of them meant no prayer would ever have played on a real Pi. There is no awk left in this project.
+
+Requirements: `python3` (3.9+, preinstalled on Raspberry Pi OS, Debian, Ubuntu and Proxmox templates), a media player (`mpv` preferred), and `curl` for installation. `timeout(1)` is used when present, with a shell watchdog as fallback. systemd is used when present, else OpenRC, else a cron fallback.
+
+CI runs the suite on Debian 12, Ubuntu 24.04, Alpine 3.20 and Fedora 40, under `dash` and shellcheck, and against Python 3.9, 3.11 and 3.13.
+
+To move a device: run the installer on the new box and `--uninstall` on the old one. There's no state to migrate.
+
+---
+
+## How it avoids failing
+
+**The stream URL is resolved at play time, not cached daily.** Mixlr mints a new broadcast id every time the mosque goes live, so a URL captured once a day is stale the moment they restart their broadcast. That was the original bug. The resolution ladder:
+
+```
+Mixlr channel API → Mixlr legacy API → configured fallback_urls
+  → last URL that actually played here → the copy in this repo → a local audio file
+```
+
+Each candidate is probed for a real audio content-type before use, and re-resolved every couple of minutes during a window — because the mosque often starts broadcasting *after* the window opens.
+
+**If nothing can be fetched, prayer times are computed locally** from latitude and longitude, using standard solar-position equations. Accuracy against Masjid-El-Noor's own published times:
+
+| | Fajr | Sunrise | Dhuhr | Asr | Maghrib | Isha |
+| --- | --- | --- | --- | --- | --- | --- |
+| error | 44 s | 28 s | 7 s | 33 s | **2 s** | 35 s |
+
+So a device with a dead network still calls the adhan at the right minute, indefinitely. Above ~48.5° latitude, where the sun may never reach the twilight angles, it falls back to the nearest-latitude (Aqrab al-Bilad) convention rather than producing nothing.
+
+**Other things it survives:** a Pi with no RTC booting at the wrong date (waits for NTP before scheduling); missing tzdata (fails loudly instead of silently shifting every prayer); a corrupt or truncated download (validated before it replaces a working file); a captive portal returning HTML (rejected, not parsed as config); two daemons racing (lock file); a stream that drops mid-adhan (reconnects for the rest of the window); an audio device that's busy (moves to the next one).
+
+It **never rewrites the crontab**. v1 wiped and rebuilt it nightly, so a single network blip at 02:30 meant silence for the whole day.
+
+---
+
+## Commands
+
+```
+prayer-sync today               today's schedule
+prayer-sync times               locally computed prayer times
+prayer-sync doctor              full health report
+prayer-sync selftest            77-check regression suite
+prayer-sync devices             audio outputs and their priority
+prayer-sync test-audio [secs]   play the live stream right now
+prayer-sync resolve             stream URLs that would be tried, in order
+prayer-sync refresh             pull the latest timetable and config
+prayer-sync play <name|url>     play a window or an arbitrary URL
+prayer-sync config              the fully merged configuration
+prayer-sync stop                stop playback
+
+journalctl -u prayer-sync -f    live logs (systemd)
+tail -f /var/log/prayer-sync.log
+```
+
+---
+
+## Repository layout
+
+```
+config.json                 fleet-wide settings
+mosques/*.json              one file per mosque
+edge/prayer-sync            orchestrator: player, audio, signals (POSIX sh)
+edge/prayer_sync_core.py    data layer: config, timetable, prayer maths
+install.sh / uninstall.sh   provisioning
+tools/update_prayers.mjs    CI: fetch and validate the timetable
+tools/resolve_stream.mjs    CI: refresh the fallback stream URL
+prayers.json                published timetable (written by CI)
+stream_url.txt              published fallback URL (written by CI)
+status.json                 last-update heartbeat
+```
+
+### Secrets
+
+Only needed for the `masjidal` timetable provider — **Settings → Secrets and variables → Actions**:
+
+- `PRAYER_API_KEY`
+- `PRAYER_API_BASE_URL`
+
+The `aladhan` provider needs neither.
+
+### CI
+
+`update-data.yml` runs twice daily, validates the payload (right date, all five prayers present, times parseable) before committing, retries on push races, and opens a GitHub issue if it fails. It has **no npm dependencies** — Puppeteer and its Chromium download are gone.
+
+`validate.yml` runs on every push: POSIX syntax checks under `dash`, shellcheck with warnings treated as errors, the full self-test inside Debian, Ubuntu, Alpine and Fedora containers, the core suite against Python 3.9/3.11/3.13, and a check that a correct five-prayer schedule is still produced with no network and no cached timetable at all.
+
+---
+
+## Upgrading from v1
+
+Just run the installer. It removes the old `mpv --volume` cron jobs, `/usr/local/bin/prayer_stream.sh`, and the `connect-speaker` service before installing v2, so nothing plays twice.
+
+`offsets.json` and `volume.txt` are now `offsets` and `audio.volume` inside `config.json`. Bluetooth setup moved into `install.sh --bluetooth MAC`; the constant 30-second reconnect loop is gone — prayer-sync reconnects on demand before each prayer instead.
+
+`jq` is no longer used at all, and Puppeteer (with its Chromium download) is gone from CI. The one new dependency is `python3`, which the installer adds if it is missing.

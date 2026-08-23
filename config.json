@@ -1,0 +1,75 @@
+{
+  "$comment": "Device configuration. Anything here overrides the mosque preset in mosques/<mosque>.json. Edit and commit; devices pick it up on their next refresh. A device can also keep a local-only override at /etc/prayer-sync/config.local.json which wins over everything.",
+  "version": 2,
+
+  "mosque": "masjid-el-noor",
+
+  "stream": {
+    "$comment": "provider: mixlr | static | icecast. Resolved fresh at play time, never trusted from cache alone.",
+    "provider": "mixlr",
+    "mixlr_slug": "masjid-el-noor",
+    "url": null,
+    "fallback_urls": [],
+    "fallback_file": "/usr/local/share/prayer-sync/adhan.mp3",
+    "resolve_timeout_seconds": 12,
+    "require_live": false
+  },
+
+  "audio": {
+    "$comment": "output: auto | bluetooth | aux | hdmi | usb | <exact sink/device name>. 'auto' walks 'priority' and uses the first one that really plays.",
+    "output": "auto",
+    "priority": ["bluetooth", "aux", "usb", "hdmi", "default"],
+    "bluetooth_mac": "",
+    "bluetooth_connect_timeout": 25,
+    "volume": 100,
+    "normalize": true,
+    "verify_playback": true,
+    "verify_seconds": 6,
+    "extra_args": "",
+    "strict_output": false
+  },
+
+  "schedule": {
+    "$comment": "Which prayers to broadcast, and which timetable fields bracket the window.",
+    "prayers": ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"],
+    "start_anchor": "prayerAdhan",
+    "stop_anchor": "prayerIqamah",
+    "jumah_replaces_dhuhr": true,
+    "jumah_weekday": 5,
+    "refresh_at": "02:30",
+    "tick_seconds": 20,
+    "max_window_minutes": 90,
+    "catch_up_grace_minutes": 3
+  },
+
+  "offsets": {
+    "$comment": "pre = minutes BEFORE start_anchor to open the stream. post = minutes AFTER stop_anchor to close it. 'default' applies to anything not listed.",
+    "default": { "pre": 5, "post": 15 },
+    "Fajr":    { "pre": 5, "post": 15 },
+    "Dhuhr":   { "pre": 5, "post": 15 },
+    "Jumah":   { "pre": 10, "post": 20 },
+    "Asr":     { "pre": 5, "post": 15 },
+    "Maghrib": { "pre": 2, "post": 10 },
+    "Isha":    { "pre": 5, "post": 15 }
+  },
+
+  "offline": {
+    "$comment": "When no fresh timetable can be fetched, times are computed locally from lat/long. assumed_iqamah_gap replaces the unknowable iqamah time.",
+    "enabled": true,
+    "assumed_iqamah_gap_minutes": 10,
+    "stale_after_days": 2
+  },
+
+  "data": {
+    "remote_base": "https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main",
+    "refresh_timeout_seconds": 25,
+    "refresh_retries": 3
+  },
+
+  "quiet_hours": {
+    "$comment": "Optional hard mute window (local time). Set enabled=true to suppress playback overnight regardless of schedule.",
+    "enabled": false,
+    "from": "23:30",
+    "to": "04:30"
+  }
+}

@@ -1,0 +1,95 @@
+name: Update prayer data
+
+# Runs twice so a delayed or failed first attempt still lands well before the
+# devices refresh at 02:30 local time. Both runs are idempotent.
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC = 02:00 Toronto (EDT) / 01:00 (EST)
+    - cron: '0 8 * * *'   # retry
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+# Never let two runs push at the same time.
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No npm install: both scripts use only the Node standard library now,
+      # so there is no dependency tree and no Chromium download to fail.
+
+      - name: Fetch timetable
+        id: prayers
+        env:
+          PRAYER_API_KEY: ${{ secrets.PRAYER_API_KEY }}
+          PRAYER_API_BASE_URL: ${{ secrets.PRAYER_API_BASE_URL }}
+        run: node tools/update_prayers.mjs
+
+      - name: Resolve fallback stream URL
+        id: stream
+        continue-on-error: true      # devices resolve this themselves at play time
+        run: node tools/resolve_stream.mjs
+
+      - name: Write status heartbeat
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = JSON.parse(fs.readFileSync("prayers.json", "utf8"));
+            const url = fs.existsSync("stream_url.txt") ? fs.readFileSync("stream_url.txt","utf8").trim() : "";
+            fs.writeFileSync("status.json", JSON.stringify({
+              updated_at: new Date().toISOString(),
+              prayer_date: p?.data?.prayerOfDay?.prayerDate ?? null,
+              mosque: p?.data?.name ?? null,
+              stream_url: url,
+            }, null, 2) + "\n");
+          '
+
+      - name: Commit and push
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add prayers.json stream_url.txt status.json
+          if git diff --staged --quiet; then
+            echo "nothing changed"
+            exit 0
+          fi
+          git commit -m "Automated update: prayer data"
+          # Another run may have pushed in between; rebase rather than fail.
+          for i in 1 2 3; do
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" && git push && exit 0
+            echo "push attempt $i failed, retrying"
+            sleep 5
+          done
+          exit 1
+
+      - name: Open an issue if this failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Reuse an existing open report instead of filing a new one daily.
+          existing=$(gh issue list --label automation-failure --state open --limit 1 --json number --jq '.[0].number' || echo "")
+          body="Workflow \`${GITHUB_WORKFLOW}\` failed on $(date -u +%F).
+
+          Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          Devices keep running on cached times and fall back to local astronomical
+          computation, so playback continues. This only needs attention if it
+          repeats for several days."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "Prayer data update failed" --label automation-failure --body "$body"
+          fi

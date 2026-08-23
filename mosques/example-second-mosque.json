@@ -1,0 +1,15 @@
+{
+  "id": "example-second-mosque",
+  "name": "Example Masjid",
+  "city": "Mississauga",
+  "timezone": "America/Toronto",
+  "location": { "latitude": 43.5890, "longitude": -79.6441, "elevation": 100 },
+  "stream": {
+    "provider": "static",
+    "url": "https://stream.example.org/live.mp3"
+  },
+  "timetable": {
+    "provider": "aladhan"
+  },
+  "calculation": { "method": "ISNA", "asr": "hanafi", "high_latitude": "angle_based" }
+}

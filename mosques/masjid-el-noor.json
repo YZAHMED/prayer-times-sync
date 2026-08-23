@@ -1,0 +1,16 @@
+{
+  "id": "masjid-el-noor",
+  "name": "Masjid-El-Noor",
+  "city": "Toronto",
+  "timezone": "America/Toronto",
+  "location": { "latitude": 43.6893245, "longitude": -79.4718826, "elevation": 0 },
+  "stream": {
+    "provider": "mixlr",
+    "mixlr_slug": "masjid-el-noor"
+  },
+  "timetable": {
+    "provider": "masjidal",
+    "masjid_id": 11
+  },
+  "calculation": { "method": "ISNA", "asr": "hanafi", "high_latitude": "angle_based" }
+}

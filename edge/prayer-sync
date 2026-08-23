@@ -1,0 +1,1122 @@
+#!/bin/sh
+# prayer-sync — plays a mosque's live stream at prayer time, unattended.
+#
+# This file is the orchestrator: it supervises the media player, picks and
+# verifies an audio output, talks to bluetoothctl, and handles signals and
+# service lifecycle. Everything involving parsing, arithmetic or time zones
+# lives in prayer_sync_core.py.
+#
+# That split is deliberate. Every portability bug this project hit came from
+# awk: mawk (the default on Raspberry Pi OS and Debian) has no {n,m} regex
+# intervals and no 0x constants, and %c differs across awks and locales. Those
+# failures were invisible except on the exact target build. There is no awk in
+# this project any more.
+#
+# POSIX sh only. No bashisms.
+
+set -u
+
+VERSION="2.0.0"
+STOPPING=0
+
+# ---------------------------------------------------------------------------
+# Paths (override via environment for testing)
+# ---------------------------------------------------------------------------
+PS_PREFIX="${PS_PREFIX:-/usr/local}"
+PS_CONF_DIR="${PS_CONF_DIR:-/etc/prayer-sync}"
+PS_STATE_DIR="${PS_STATE_DIR:-/var/lib/prayer-sync}"
+PS_RUN_DIR="${PS_RUN_DIR:-/var/run/prayer-sync}"
+PS_LOG_FILE="${PS_LOG_FILE:-/var/log/prayer-sync.log}"
+PS_SHARE_DIR="${PS_SHARE_DIR:-$PS_PREFIX/share/prayer-sync}"
+
+CONFIG_MAIN="$PS_CONF_DIR/config.json"
+CONFIG_LOCAL="$PS_CONF_DIR/config.local.json"
+MOSQUE_DIR="$PS_CONF_DIR/mosques"
+LAST_GOOD_STREAM="$PS_STATE_DIR/last_good_stream.txt"
+SINK_CACHE="$PS_STATE_DIR/last_good_sink.txt"
+MERGED_CFG="$PS_STATE_DIR/config.merged"
+WINDOWS_FILE="$PS_STATE_DIR/windows.today"
+LOCK_FILE="$PS_RUN_DIR/prayer-sync.lock"
+
+# PID of the media player while it runs, so a signal can stop it promptly.
+CURRENT_PLAYER_PID=""
+
+TAB="$(printf '\t')"
+
+# ---------------------------------------------------------------------------
+# Logging — stderr (journald-friendly), never stdout: callers parse stdout.
+# ---------------------------------------------------------------------------
+LOG_MAX_BYTES=1048576
+
+_log() {
+    _lvl="$1"; shift
+    _line="$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null) [$_lvl] $*"
+    printf '%s\n' "$_line" >&2
+    if [ -n "${PS_LOG_FILE:-}" ]; then
+        # Rotate before writing so a runaway loop cannot fill the SD card.
+        if [ -f "$PS_LOG_FILE" ]; then
+            _sz=$(wc -c < "$PS_LOG_FILE" 2>/dev/null || echo 0)
+            [ "$_sz" -gt "$LOG_MAX_BYTES" ] 2>/dev/null && mv -f "$PS_LOG_FILE" "$PS_LOG_FILE.1" 2>/dev/null
+        fi
+        printf '%s\n' "$_line" >> "$PS_LOG_FILE" 2>/dev/null || true
+    fi
+}
+log_info()  { _log INFO  "$@"; }
+log_warn()  { _log WARN  "$@"; }
+log_error() { _log ERROR "$@"; }
+log_debug() { [ "${PS_DEBUG:-0}" = "1" ] && _log DEBUG "$@"; return 0; }
+die() { log_error "$@"; exit 1; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+ensure_dirs() {
+    for _d in "$PS_CONF_DIR" "$PS_STATE_DIR" "$PS_RUN_DIR" "$MOSQUE_DIR" "$PS_SHARE_DIR"; do
+        [ -d "$_d" ] || mkdir -p "$_d" 2>/dev/null || true
+    done
+}
+
+# ---------------------------------------------------------------------------
+# The Python data layer
+# ---------------------------------------------------------------------------
+CORE_PY=""
+PYTHON=""
+
+find_core() {
+    [ -n "$PYTHON" ] && return 0
+    for _p in python3 python; do
+        if have "$_p" && "$_p" -c 'import sys,zoneinfo; sys.exit(0 if sys.version_info>=(3,9) else 1)' 2>/dev/null; then
+            PYTHON="$_p"; break
+        fi
+    done
+    [ -n "$PYTHON" ] || die "python3 (3.9 or newer) is required but was not found. Install it: apt install python3 / apk add python3"
+
+    if [ -z "$CORE_PY" ]; then
+        _self_dir=$(unset CDPATH; cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
+        for _c in "${PS_CORE:-}" "$PS_SHARE_DIR/prayer_sync_core.py" \
+                  "$_self_dir/prayer_sync_core.py" "$PS_PREFIX/lib/prayer-sync/prayer_sync_core.py"; do
+            [ -n "$_c" ] && [ -f "$_c" ] && { CORE_PY="$_c"; break; }
+        done
+    fi
+    [ -n "$CORE_PY" ] || die "prayer_sync_core.py not found (looked in $PS_SHARE_DIR and next to this script)"
+}
+
+core() { # core SUBCOMMAND [args...]
+    find_core
+    PS_CONF_DIR="$PS_CONF_DIR" PS_STATE_DIR="$PS_STATE_DIR" "$PYTHON" "$CORE_PY" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Configuration access
+#
+# The merged configuration is materialised once per load as "path<TAB>value",
+# so reading a setting is a cheap lookup rather than another interpreter start.
+# ---------------------------------------------------------------------------
+config_load() {
+    ensure_dirs
+    if core config > "$MERGED_CFG.new" 2>/dev/null && [ -s "$MERGED_CFG.new" ]; then
+        mv -f "$MERGED_CFG.new" "$MERGED_CFG"
+    else
+        rm -f "$MERGED_CFG.new"
+        [ -s "$MERGED_CFG" ] || die "could not build the configuration (see errors above)"
+        log_warn "keeping the previous merged configuration"
+    fi
+    TZ_NAME=$(cfg timezone UTC)
+    export TZ="$TZ_NAME"
+}
+
+cfg() { # cfg PATH [DEFAULT]
+    [ -f "$MERGED_CFG" ] || { printf '%s\n' "${2:-}"; return 0; }
+    _want="$1"
+    while IFS="$TAB" read -r _k _v; do
+        if [ "$_k" = "$_want" ]; then
+            [ -n "$_v" ] && [ "$_v" != "null" ] && { printf '%s\n' "$_v"; return 0; }
+            break
+        fi
+    done < "$MERGED_CFG"
+    printf '%s\n' "${2:-}"
+}
+
+cfg_array() { # cfg_array PATH -> one value per line, in order
+    [ -f "$MERGED_CFG" ] || return 0
+    _i=0
+    while [ "$_i" -lt 64 ]; do
+        _v=$(cfg "$1[$_i]" "")
+        [ -n "$_v" ] || break
+        printf '%s\n' "$_v"
+        _i=$((_i + 1))
+    done
+}
+
+cfg_int() { # cfg_int PATH DEFAULT
+    _v=$(cfg "$1" "$2")
+    case "$_v" in
+        ''|*[!0-9-]*) printf '%s\n' "$2" ;;
+        *) printf '%s\n' "$_v" ;;
+    esac
+}
+
+cfg_bool() { # cfg_bool PATH DEFAULT -> 1 or 0
+    case "$(cfg "$1" "$2")" in
+        true|True|TRUE|1|yes|on) printf '1\n' ;;
+        *) printf '0\n' ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Time helpers (pure shell arithmetic — note the octal traps)
+# ---------------------------------------------------------------------------
+_dec() { # strip leading zeros so 08/09 are not read as invalid octal
+    _d="${1#"${1%%[!0]*}"}"
+    [ -n "$_d" ] || _d=0
+    printf '%s\n' "$_d"
+}
+
+now_sec() {
+    _t=$(TZ="$TZ_NAME" date '+%H %M %S') || { printf '0\n'; return 1; }
+    # shellcheck disable=SC2086
+    set -- $_t
+    printf '%s\n' "$(( $(_dec "$1") * 3600 + $(_dec "$2") * 60 + $(_dec "$3") ))"
+}
+
+today_ymd() { TZ="$TZ_NAME" date '+%Y-%m-%d'; }
+sec_to_hm() {
+    _s=$(( ${1:-0} % 86400 )); [ "$_s" -lt 0 ] && _s=$((_s + 86400))
+    printf '%02d:%02d\n' "$((_s / 3600))" "$(( (_s % 3600) / 60 ))"
+}
+
+hms_to_sec() { # only used for operator-supplied values such as quiet_hours
+    case "${1:-}" in
+        [0-9][0-9]:[0-9][0-9]|[0-9]:[0-9][0-9]) : ;;
+        [0-9][0-9]:[0-9][0-9]:[0-9][0-9]|[0-9]:[0-9][0-9]:[0-9][0-9]) : ;;
+        *) return 1 ;;
+    esac
+    _h=$(_dec "${1%%:*}"); _rest="${1#*:}"; _m=$(_dec "${_rest%%:*}")
+    case "$1" in *:*:*) _sec=$(_dec "${1##*:}") ;; *) _sec=0 ;; esac
+    [ "$_h" -gt 23 ] || [ "$_m" -gt 59 ] || [ "$_sec" -gt 59 ] && return 1
+    printf '%s\n' "$((_h * 3600 + _m * 60 + _sec))"
+}
+
+# ---------------------------------------------------------------------------
+# Process control
+# ---------------------------------------------------------------------------
+TIMEOUT_BIN=""
+for _t in /usr/bin/timeout /bin/timeout timeout; do
+    if command -v "$_t" >/dev/null 2>&1; then TIMEOUT_BIN="$_t"; break; fi
+done
+
+# The child is always backgrounded and waited on, never run in the foreground:
+# a foreground `timeout` blocks the shell so signal traps cannot run until it
+# returns, which made `systemctl stop` hang for a whole prayer window and left
+# the player orphaned and still audible.
+run_limited() {
+    _secs="$1"; shift
+    if [ -n "$TIMEOUT_BIN" ]; then
+        "$TIMEOUT_BIN" "$_secs" "$@" &
+        CURRENT_PLAYER_PID=$!
+        _rl_watch=""
+    else
+        "$@" &
+        CURRENT_PLAYER_PID=$!
+        (
+            _i=0
+            while [ "$_i" -lt "$_secs" ]; do
+                kill -0 "$CURRENT_PLAYER_PID" 2>/dev/null || exit 0
+                sleep 1
+                _i=$((_i + 1))
+            done
+            kill -TERM "$CURRENT_PLAYER_PID" 2>/dev/null
+            sleep 2
+            kill -KILL "$CURRENT_PLAYER_PID" 2>/dev/null
+        ) &
+        _rl_watch=$!
+    fi
+    wait "$CURRENT_PLAYER_PID" 2>/dev/null
+    _rl_rc=$?
+    [ -n "$_rl_watch" ] && kill "$_rl_watch" 2>/dev/null
+    CURRENT_PLAYER_PID=""
+    return $_rl_rc
+}
+
+# ---------------------------------------------------------------------------
+# Streams
+# ---------------------------------------------------------------------------
+resolve_stream() { core resolve; }
+
+stream_is_playable() {
+    case "$1" in /*) [ -f "$1" ] && return 0 || return 1 ;; esac
+    core probe "$1" >/dev/null 2>&1
+}
+
+remember_good_stream() {
+    printf '%s\n' "$1" > "$LAST_GOOD_STREAM.new" 2>/dev/null &&
+        mv -f "$LAST_GOOD_STREAM.new" "$LAST_GOOD_STREAM" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Audio output
+#
+# Which outputs exist changes when the box is re-imaged or moved from a Pi to a
+# VM, so they are discovered at play time and tried in order until one really
+# produces sound. A muted ALSA control is the most common cause of "everything
+# looks right but there is no sound", so we always unmute first.
+# ---------------------------------------------------------------------------
+PLAYER_BIN=""
+detect_player() {
+    for _p in mpv ffplay mpg123 cvlc; do
+        if have "$_p"; then PLAYER_BIN="$_p"; return 0; fi
+    done
+    return 1
+}
+
+classify_device() { # classify_device "id" "description" -> class
+    _cid=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+    _cdd=$(printf '%s %s' "$1" "$2" | tr 'A-Z' 'a-z')
+    case "$_cdd" in *bluez*|*bluetooth*|*bluealsa*) printf 'bluetooth\n'; return ;; esac
+    case "$_cdd" in *hdmi*|*vc4*|*displayport*)     printf 'hdmi\n';      return ;; esac
+    case "$_cdd" in *usb*)                          printf 'usb\n';       return ;; esac
+    case "$_cdd" in
+        *analog*|*headphone*|*bcm2835*|*lineout*|*"line out"*|*jack*|*aux*|*"3.5"*)
+            printf 'aux\n'; return ;;
+    esac
+    # Classify generic entries on the device id alone: a description such as
+    # "Autoselect device" must not be allowed to match.
+    case "$_cid" in
+        auto|alsa|pulse|pipewire|oss|sndio|coreaudio|*default*) printf 'default\n'; return ;;
+    esac
+    printf 'other\n'
+}
+
+# "class<TAB>device-id<TAB>description", one per line.
+audio_devices() {
+    if have mpv; then
+        mpv --audio-device=help 2>/dev/null |
+            sed -n "s/^[[:space:]]*'\\([^']*\\)'[[:space:]]*(\\(.*\\))[[:space:]]*\$/\\1${TAB}\\2/p" |
+            while IFS="$TAB" read -r _id _desc; do
+                [ -n "$_id" ] || continue
+                printf '%s\t%s\t%s\n' "$(classify_device "$_id" "$_desc")" "$_id" "$_desc"
+            done
+        return 0
+    fi
+    if have pactl && pactl info >/dev/null 2>&1; then
+        pactl list short sinks 2>/dev/null | cut -f2 | while read -r _name; do
+            [ -n "$_name" ] || continue
+            printf '%s\tpulse/%s\t%s\n' "$(classify_device "$_name" "$_name")" "$_name" "$_name"
+        done
+        return 0
+    fi
+    if have aplay; then
+        aplay -l 2>/dev/null | sed -n 's/^card \([0-9]*\):.*/\1/p' | while read -r _card; do
+            printf '%s\talsa/plughw:%s,0\tcard %s\n' "$(classify_device "hw$_card" "card $_card")" "$_card" "$_card"
+        done
+        return 0
+    fi
+    return 1
+}
+
+bt_paired_audio_mac() {
+    have bluetoothctl || return 1
+    { bluetoothctl devices Paired 2>/dev/null || bluetoothctl paired-devices 2>/dev/null; } |
+        sed -n 's/^Device \([0-9A-Fa-f:]*\) .*/\1/p' | head -1
+}
+
+bt_is_connected() {
+    have bluetoothctl || return 1
+    bluetoothctl info "$1" 2>/dev/null | grep -q 'Connected: yes'
+}
+
+bt_ensure_connected() {
+    _mac=$(cfg 'audio.bluetooth_mac' "")
+    [ -n "$_mac" ] || _mac=$(bt_paired_audio_mac 2>/dev/null) || _mac=""
+    [ -n "$_mac" ] || return 1
+    bt_is_connected "$_mac" && return 0
+    have bluetoothctl || return 1
+
+    log_info "bluetooth: connecting to $_mac"
+    have rfkill && rfkill unblock bluetooth 2>/dev/null   # soft-blocked after a reboot
+    bluetoothctl power on >/dev/null 2>&1
+    bluetoothctl trust "$_mac" >/dev/null 2>&1
+    bluetoothctl connect "$_mac" >/dev/null 2>&1 &
+
+    _wait=$(cfg_int 'audio.bluetooth_connect_timeout' 25)
+    _i=0
+    while [ "$_i" -lt "$_wait" ]; do
+        bt_is_connected "$_mac" && { log_info "bluetooth: connected"; sleep 2; return 0; }
+        sleep 1; _i=$((_i + 1))
+    done
+    log_warn "bluetooth: $_mac did not connect within ${_wait}s — falling back to a wired output"
+    return 1
+}
+
+unmute_everything() {
+    _vol=$(cfg_int 'audio.volume' 100)
+    [ "$_vol" -gt 100 ] && _hwvol=100 || _hwvol="$_vol"
+
+    if have pactl && pactl info >/dev/null 2>&1; then
+        pactl list short sinks 2>/dev/null | cut -f2 | while read -r _name; do
+            [ -n "$_name" ] || continue
+            pactl set-sink-mute "$_name" 0 >/dev/null 2>&1
+            pactl set-sink-volume "$_name" "${_hwvol}%" >/dev/null 2>&1
+        done
+    fi
+    have wpctl && wpctl set-mute @DEFAULT_AUDIO_SINK@ 0 >/dev/null 2>&1
+    if have amixer; then
+        for _c in 0 1 2 3; do
+            amixer -c "$_c" scontrols 2>/dev/null | sed -n "s/.*'\\(.*\\)',.*/\\1/p" | while read -r _ctl; do
+                case "$_ctl" in
+                    Master|PCM|Headphone|Headphones|Speaker|Digital|Line*|Analogue*|Playback*)
+                        amixer -c "$_c" sset "$_ctl" unmute       >/dev/null 2>&1
+                        amixer -c "$_c" sset "$_ctl" "${_hwvol}%" >/dev/null 2>&1
+                        ;;
+                esac
+            done
+        done
+        amixer sset Master unmute >/dev/null 2>&1
+    fi
+}
+
+# Older Raspberry Pi kernels route analog vs HDMI through a numid switch.
+pi_force_analog() { have amixer && amixer cset numid=3 1 >/dev/null 2>&1; return 0; }
+
+_devices_of_class() { # _devices_of_class FILE CLASS [invert]
+    while IFS="$TAB" read -r _c _i _d; do
+        [ -n "$_i" ] || continue
+        if [ "${3:-}" = "invert" ]; then
+            [ "$_c" != "$2" ] && printf '%s\n' "$_i"
+        else
+            [ "$_c" = "$2" ] && printf '%s\n' "$_i"
+        fi
+    done < "$1"
+}
+
+ordered_devices() { # prints device ids, best first, de-duplicated
+    _want=$(cfg 'audio.output' auto)
+    _devs="${TMPDIR:-/tmp}/prayer-sync.devs.$$"
+    audio_devices > "$_devs" 2>/dev/null || : > "$_devs"
+
+    {
+        if [ "$_want" != "auto" ]; then
+            case "$_want" in
+                bluetooth|aux|hdmi|usb|default|other)
+                    [ "$_want" = "bluetooth" ] && bt_ensure_connected >/dev/null 2>&1
+                    [ "$_want" = "aux" ] && pi_force_analog
+                    audio_devices > "$_devs" 2>/dev/null || true
+                    _devices_of_class "$_devs" "$_want"
+                    ;;
+                *) printf '%s\n' "$_want" ;;   # a literal device id
+            esac
+            # Unless told to be strict, still offer every other output: a
+            # renamed sink or an absent speaker must not cause total silence.
+            if [ "$(cfg_bool 'audio.strict_output' false)" != "1" ]; then
+                _devices_of_class "$_devs" "$_want" invert
+                printf 'auto\n'
+            fi
+        else
+            cfg_array 'audio.priority' > "$_devs.pri"
+            [ -s "$_devs.pri" ] || printf 'bluetooth\naux\nusb\nhdmi\ndefault\n' > "$_devs.pri"
+            while read -r _class; do
+                [ -n "$_class" ] || continue
+                if [ "$_class" = "bluetooth" ]; then
+                    # Only offer Bluetooth when the speaker is genuinely
+                    # connected, else mpv opens a dead sink and the adhan plays
+                    # into the void with no error at all.
+                    bt_ensure_connected >/dev/null 2>&1 || continue
+                    audio_devices > "$_devs" 2>/dev/null || true
+                fi
+                [ "$_class" = "aux" ] && pi_force_analog
+                _devices_of_class "$_devs" "$_class"
+            done < "$_devs.pri"
+            rm -f "$_devs.pri"
+            _devices_of_class "$_devs" other    # unclassified beats silence
+            printf 'auto\n'
+        fi
+    } | { _seen=""; while read -r _line; do
+            [ -n "$_line" ] || continue
+            case "$TAB$_seen$TAB" in *"$TAB$_line$TAB"*) continue ;; esac
+            _seen="$_seen$TAB$_line"
+            printf '%s\n' "$_line"
+          done; }
+
+    rm -f "$_devs"
+}
+
+# ---------------------------------------------------------------------------
+# Playback
+# ---------------------------------------------------------------------------
+play_attempt() { # play_attempt DEVICE URL MAX_SECONDS
+    _dev="$1"; _url="$2"; _max="$3"
+    _vol=$(cfg_int 'audio.volume' 100)
+    _filter=$(cfg 'audio.filter' "")
+    if [ -z "$_filter" ] && [ "$(cfg_bool 'audio.normalize' true)" = "1" ]; then
+        _filter="loudnorm"
+    fi
+    detect_player || { log_error "no media player installed (mpv, ffplay, mpg123 or cvlc)"; return 1; }
+
+    case "$PLAYER_BIN" in
+        mpv)
+            set -- --no-video --no-terminal --really-quiet --idle=no --no-config \
+                   --audio-device="$_dev" --volume="$_vol" \
+                   --cache=yes --demuxer-max-bytes=16MiB --demuxer-readahead-secs=5 \
+                   --network-timeout=20 \
+                   --stream-lavf-o=reconnect=1,reconnect_at_eof=1,reconnect_streamed=1,reconnect_delay_max=10 \
+                   --user-agent="prayer-sync/$VERSION"
+            [ -n "$_filter" ] && set -- "$@" --af="$_filter"
+            _extra=$(cfg 'audio.extra_args' "")
+            if [ -n "$_extra" ]; then
+                # Deliberately unquoted: a list of flags, not one word.
+                # shellcheck disable=SC2086
+                set -- "$@" $_extra
+            fi
+            set -- "$@" "$_url"
+            run_limited "$_max" mpv "$@" >/dev/null 2>&1
+            ;;
+        ffplay)
+            [ "$_vol" -gt 100 ] && _vol=100
+            run_limited "$_max" ffplay -nodisp -autoexit -loglevel error -volume "$_vol" "$_url" >/dev/null 2>&1
+            ;;
+        mpg123) run_limited "$_max" mpg123 -q "$_url" >/dev/null 2>&1 ;;
+        cvlc)   run_limited "$_max" cvlc --intf dummy --play-and-exit --quiet "$_url" >/dev/null 2>&1 ;;
+    esac
+}
+
+stop_playback() {
+    if [ -n "${CURRENT_PLAYER_PID:-}" ]; then
+        have pkill && pkill -TERM -P "$CURRENT_PLAYER_PID" 2>/dev/null   # timeout's child
+        kill -TERM "$CURRENT_PLAYER_PID" 2>/dev/null
+        _i=0
+        while [ "$_i" -lt 5 ] && kill -0 "$CURRENT_PLAYER_PID" 2>/dev/null; do
+            sleep 1; _i=$((_i + 1))
+        done
+        have pkill && pkill -KILL -P "$CURRENT_PLAYER_PID" 2>/dev/null
+        kill -KILL "$CURRENT_PLAYER_PID" 2>/dev/null
+        CURRENT_PLAYER_PID=""
+    fi
+}
+
+# Back off between attempts without ever sleeping past the end of the window.
+_sleep_bounded() {
+    _left=$(( $2 - $(now_sec) ))
+    [ "$_left" -le 0 ] && return 0
+    [ "$1" -lt "$_left" ] && sleep "$1" || sleep "$_left"
+}
+
+_nth_line() { sed -n "${1}p" "$2"; }
+
+# Supervised playback for one prayer window.
+#
+# The mosque often starts broadcasting only moments before the adhan, and the
+# window opens before that, so a failed connection is normal and must be
+# retried rather than treated as fatal. Streams and outputs are both cycled.
+run_window() { # run_window NAME WINDOW_START WINDOW_END
+    _name="$1"; _wstart="$2"; _wend="$3"
+    log_info "$_name: window open $(sec_to_hm "$_wstart")-$(sec_to_hm "$_wend")"
+    unmute_everything
+
+    _devlist="${TMPDIR:-/tmp}/prayer-sync.devlist.$$"
+    ordered_devices > "$_devlist" 2>/dev/null || printf 'auto\n' > "$_devlist"
+    [ -s "$_devlist" ] || printf 'auto\n' > "$_devlist"
+    _ndev=$(wc -l < "$_devlist" | tr -d ' ')
+
+    _urllist="${TMPDIR:-/tmp}/prayer-sync.urllist.$$"
+    resolve_stream > "$_urllist" 2>/dev/null || : > "$_urllist"
+    _nurl=$(wc -l < "$_urllist" | tr -d ' ')
+
+    if [ "${_nurl:-0}" -eq 0 ]; then
+        log_warn "$_name: nothing resolved yet — will keep retrying until the window closes"
+    else
+        log_info "$_name: $_nurl stream candidate(s), $_ndev audio output(s): $(tr '\n' ' ' < "$_devlist")"
+    fi
+
+    _ui=1; _di=1; _played_total=0; _attempts=0; _last_resolve=$(now_sec); _minok=8
+
+    while : ; do
+        [ "${STOPPING:-0}" = "1" ] && break
+        _now=$(now_sec)
+        _remaining=$((_wend - _now))
+        [ "$_remaining" -le 2 ] && break
+
+        # Re-resolve periodically: the broadcast may only have just started.
+        # Retry sooner while there is nothing at all to play.
+        _requiz=120; [ "${_nurl:-0}" -eq 0 ] && _requiz=20
+        if [ $((_now - _last_resolve)) -ge "$_requiz" ]; then
+            if resolve_stream > "$_urllist.new" 2>/dev/null && [ -s "$_urllist.new" ]; then
+                mv -f "$_urllist.new" "$_urllist"
+            fi
+            rm -f "$_urllist.new"
+            _nurl=$(wc -l < "$_urllist" | tr -d ' ')
+            _last_resolve=$_now
+        fi
+
+        if [ "${_nurl:-0}" -eq 0 ]; then
+            _sleep_bounded 10 "$_wend"
+            continue
+        fi
+
+        _url=$(_nth_line "$_ui" "$_urllist")
+        _dev=$(_nth_line "$_di" "$_devlist")
+        [ -n "$_url" ] || { _ui=1; continue; }
+        [ -n "$_dev" ] || { _di=1; continue; }
+
+        _attempts=$((_attempts + 1))
+        if ! stream_is_playable "$_url"; then
+            log_debug "$_name: candidate $_ui not playable, advancing"
+            _ui=$((_ui + 1)); [ "$_ui" -gt "$_nurl" ] && _ui=1
+            [ "$_attempts" -ge "$_nurl" ] && _sleep_bounded 10 "$_wend"
+            continue
+        fi
+
+        log_info "$_name: playing $_url via $_dev (${_remaining}s left)"
+        _t0=$(now_sec)
+        play_attempt "$_dev" "$_url" "$_remaining"
+        _t1=$(now_sec)
+        _ran=$((_t1 - _t0)); [ "$_ran" -lt 0 ] && _ran=0
+        _played_total=$((_played_total + _ran))
+
+        if [ "$_ran" -ge "$_minok" ]; then
+            remember_good_stream "$_url"
+            printf '%s\n' "$_dev" > "$SINK_CACHE" 2>/dev/null || true
+            [ $((_wend - _t1)) -le 2 ] && break
+            log_warn "$_name: playback ended after ${_ran}s with time left — reconnecting"
+            _sleep_bounded 2 "$_wend"
+        else
+            log_warn "$_name: output '$_dev' failed after ${_ran}s — trying next output"
+            _di=$((_di + 1))
+            if [ "$_di" -gt "$_ndev" ]; then
+                _di=1
+                _ui=$((_ui + 1)); [ "$_ui" -gt "$_nurl" ] && _ui=1
+                _sleep_bounded 10 "$_wend"
+            else
+                _sleep_bounded 2 "$_wend"
+            fi
+        fi
+    done
+
+    rm -f "$_devlist" "$_urllist"
+    if [ "$_played_total" -ge "$_minok" ]; then
+        log_info "$_name: window complete (${_played_total}s of audio)"
+        return 0
+    fi
+    log_error "$_name: window ended with no successful playback"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+LOCK_HELD=0
+acquire_lock() {
+    _d="$LOCK_FILE.d"
+    if mkdir "$_d" 2>/dev/null; then
+        printf '%s\n' "$$" > "$_d/pid" 2>/dev/null; LOCK_HELD=1; return 0
+    fi
+    _old=$(cat "$_d/pid" 2>/dev/null || echo "")
+    if [ -n "$_old" ] && kill -0 "$_old" 2>/dev/null; then return 1; fi
+    log_warn "removing stale lock from pid ${_old:-unknown}"
+    rm -rf "$_d" 2>/dev/null
+    if mkdir "$_d" 2>/dev/null; then
+        printf '%s\n' "$$" > "$_d/pid" 2>/dev/null; LOCK_HELD=1; return 0
+    fi
+    return 1
+}
+
+cleanup() {
+    stop_playback
+    [ "$LOCK_HELD" = "1" ] && rm -rf "$LOCK_FILE.d" 2>/dev/null
+    rm -f "${TMPDIR:-/tmp}"/prayer-sync.*."$$" "${TMPDIR:-/tmp}"/prayer-sync.*."$$".* 2>/dev/null
+    return 0
+}
+on_term() { STOPPING=1; log_info "shutting down"; cleanup; exit 0; }
+
+# A Raspberry Pi has no battery-backed clock: it boots believing it is 1970 (or
+# whenever it last shut down) until NTP catches up. Scheduling against that
+# would fire every prayer at once, so wait for a plausible date first.
+wait_for_sane_clock() {
+    _i=0
+    while [ "$_i" -lt 180 ]; do
+        _y=$(date '+%Y' 2>/dev/null || echo 1970)
+        [ "$_y" -ge 2024 ] 2>/dev/null && { [ "$_i" -gt 0 ] && log_info "clock synchronised ($(date))"; return 0; }
+        [ "$_i" = 0 ] && log_warn "system clock reads $_y — waiting for NTP before scheduling"
+        sleep 5; _i=$((_i + 5))
+    done
+    log_error "clock still implausible after 3 minutes; continuing anyway"
+    return 1
+}
+
+in_quiet_hours() {
+    [ "$(cfg_bool 'quiet_hours.enabled' false)" = "1" ] || return 1
+    _f=$(hms_to_sec "$(cfg 'quiet_hours.from' '23:30')") || return 1
+    _t=$(hms_to_sec "$(cfg 'quiet_hours.to' '04:30')") || return 1
+    _n=$(now_sec)
+    if [ "$_f" -le "$_t" ]; then
+        [ "$_n" -ge "$_f" ] && [ "$_n" -lt "$_t" ]
+    else
+        [ "$_n" -ge "$_f" ] || [ "$_n" -lt "$_t" ]
+    fi
+}
+
+_load_windows() {
+    if core windows > "$WINDOWS_FILE.new" 2>/dev/null && [ -s "$WINDOWS_FILE.new" ]; then
+        mv -f "$WINDOWS_FILE.new" "$WINDOWS_FILE"
+        return 0
+    fi
+    rm -f "$WINDOWS_FILE.new"
+    log_error "could not build today's schedule"
+    return 1
+}
+
+_due_window() { # prints "NAME<TAB>start<TAB>end" for the window containing now
+    _n=$(now_sec)
+    while IFS="$TAB" read -r _wn _ws _we; do
+        [ -n "$_wn" ] || continue
+        if [ "$_n" -ge "$_ws" ] && [ "$_n" -lt "$_we" ]; then
+            printf '%s\t%s\t%s\n' "$_wn" "$_ws" "$_we"; return 0
+        fi
+    done < "$WINDOWS_FILE"
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+cmd_run() {
+    acquire_lock || die "another prayer-sync instance is already running"
+    trap on_term TERM INT HUP
+    trap cleanup EXIT
+
+    wait_for_sane_clock
+    config_load
+    log_info "prayer-sync $VERSION starting (mosque=$(cfg 'mosque' '?') tz=$TZ_NAME)"
+    core refresh >/dev/null 2>&1 || true
+    config_load
+
+    _tick=$(cfg_int 'schedule.tick_seconds' 20)
+    [ "$_tick" -lt 5 ] && _tick=5
+    _refresh_at=$(hms_to_sec "$(cfg 'schedule.refresh_at' '02:30')") || _refresh_at=9000
+    _day=""; _refresh_day=""; _next_try=0; _recompute=1
+
+    while : ; do
+        _now=$(now_sec)
+        _today=$(today_ymd)
+
+        if [ "$_today" != "$_day" ]; then
+            [ -n "$_day" ] && log_info "date rolled over to $_today"
+            _day="$_today"; _recompute=1
+        fi
+
+        if [ "$_refresh_day" != "$_today" ] && [ "$_now" -ge "$_refresh_at" ] && [ "$_now" -ge "$_next_try" ]; then
+            if core refresh; then
+                _refresh_day="$_today"; config_load
+            else
+                # Do not give up for the day because the network blinked.
+                _next_try=$((_now + 1800))
+                log_warn "refresh failed; retrying in 30 minutes (running on cached/computed times meanwhile)"
+            fi
+            _recompute=1
+        fi
+
+        if [ "$_recompute" = "1" ]; then
+            if _load_windows; then
+                log_info "plan for $_today [$(cfg 'mosque' '?') / $TZ_NAME]:"
+                while IFS="$TAB" read -r _pn _ps _pe; do
+                    [ -n "$_pn" ] && log_info "  $_pn $(sec_to_hm "$_ps")-$(sec_to_hm "$_pe")"
+                done < "$WINDOWS_FILE"
+            fi
+            _recompute=0
+        fi
+
+        if [ -f "$WINDOWS_FILE" ] && ! in_quiet_hours; then
+            if _due=$(_due_window); then
+                _n=${_due%%"$TAB"*}
+                _rest=${_due#*"$TAB"}
+                _s=${_rest%%"$TAB"*}
+                _e=${_rest#*"$TAB"}
+                run_window "$_n" "$_s" "$_e" || true
+                # Never re-enter instantly: a window that fails fast would
+                # otherwise spin the CPU until it closes.
+                [ "$(now_sec)" -lt "$_e" ] && sleep "$_tick"
+                continue
+            fi
+        fi
+        sleep "$_tick"
+    done
+}
+
+# Single-shot evaluation, for hosts without systemd (drive it from cron).
+cmd_once() {
+    acquire_lock || { log_info "another instance is running; nothing to do"; return 0; }
+    trap cleanup EXIT
+    config_load
+    core refresh >/dev/null 2>&1 || true
+    config_load
+    _load_windows || return 1
+    in_quiet_hours && { log_info "inside quiet hours; skipping"; return 0; }
+    if _due=$(_due_window); then
+        _n=${_due%%"$TAB"*}; _rest=${_due#*"$TAB"}
+        run_window "$_n" "${_rest%%"$TAB"*}" "${_rest#*"$TAB"}"
+    else
+        log_info "nothing scheduled right now"
+    fi
+}
+
+cmd_today() {
+    config_load
+    _load_windows || return 1
+    _src=$(core status 2>/dev/null | sed -n "s/^source${TAB}//p")
+    _ttd=$(core status 2>/dev/null | sed -n "s/^timetable_date${TAB}//p")
+    printf '%s — %s, %s\n' "$(today_ymd)" "$(cfg 'mosque' '?')" "$TZ_NAME"
+    if [ "$_src" = "computed" ]; then
+        printf 'source: computed locally (cached timetable is for %s)\n\n' "${_ttd:-unknown}"
+    else
+        printf 'source: published timetable (%s)\n\n' "${_ttd:-unknown}"
+    fi
+    printf '%-10s %-8s %-8s %s\n' PRAYER OPEN CLOSE LENGTH
+    while IFS="$TAB" read -r _n _s _e; do
+        [ -n "$_n" ] || continue
+        printf '%-10s %-8s %-8s %d min\n' "$_n" "$(sec_to_hm "$_s")" "$(sec_to_hm "$_e")" "$(( (_e - _s) / 60 ))"
+    done < "$WINDOWS_FILE"
+}
+
+cmd_refresh() { config_load; core refresh && echo "refreshed" || { echo "refresh failed (cached data still in use)"; return 1; }; }
+cmd_resolve() { config_load; resolve_stream; }
+cmd_times()   { config_load; core times; }
+cmd_config()  { config_load; sort "$MERGED_CFG"; }
+
+cmd_devices() {
+    config_load
+    printf '%-11s %-52s %s\n' CLASS DEVICE DESCRIPTION
+    audio_devices 2>/dev/null | while IFS="$TAB" read -r _c _i _d; do
+        printf '%-11s %-52s %s\n' "$_c" "$_i" "$_d"
+    done
+    printf '\nselection order for audio.output=%s:\n' "$(cfg 'audio.output' auto)"
+    _i=0
+    ordered_devices 2>/dev/null | while read -r _dev; do
+        _i=$((_i + 1)); printf '  %d. %s\n' "$_i" "$_dev"
+    done
+}
+
+cmd_test_audio() {
+    config_load
+    _secs="${1:-15}"
+    unmute_everything
+    _dev=$(ordered_devices 2>/dev/null | head -1)
+    _url=$(resolve_stream 2>/dev/null | head -1)
+    [ -n "$_url" ] || { log_error "no stream to test with"; return 1; }
+    echo "playing $_url for ${_secs}s on '$_dev' at volume $(cfg_int 'audio.volume' 100)"
+    play_attempt "$_dev" "$_url" "$_secs"
+    echo "done — if you heard nothing, run: prayer-sync devices"
+}
+
+cmd_play() {
+    config_load
+    _target="${1:-}"
+    [ -n "$_target" ] || { echo "usage: prayer-sync play <PrayerName|URL> [seconds]" >&2; return 2; }
+    _secs="${2:-60}"
+    case "$_target" in
+        http://*|https://*|/*)
+            unmute_everything
+            play_attempt "$(ordered_devices 2>/dev/null | head -1)" "$_target" "$_secs"
+            ;;
+        *)
+            _load_windows || return 1
+            grep -q "^$_target$TAB" "$WINDOWS_FILE" || { echo "no window named '$_target' today" >&2; return 1; }
+            _now=$(now_sec)
+            run_window "$_target" "$_now" "$((_now + _secs))"
+            ;;
+    esac
+}
+
+cmd_stop() {
+    _pid=$(cat "$LOCK_FILE.d/pid" 2>/dev/null || echo "")
+    stop_playback
+    have pkill && pkill -f 'mpv .*listen.mixlr' 2>/dev/null
+    [ -n "$_pid" ] && echo "running daemon pid: $_pid (use systemctl stop prayer-sync to stop it)"
+    echo "playback stopped"
+}
+
+# ---------------------------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------------------------
+DOC_TALLY=""
+_ok()   { printf '  [ ok ] %s\n' "$*"; }
+_warn() { printf '  [warn] %s\n' "$*"; [ -n "$DOC_TALLY" ] && printf 'w\n' >> "$DOC_TALLY"; return 0; }
+_bad()  { printf '  [FAIL] %s\n' "$*"; [ -n "$DOC_TALLY" ] && printf 'f\n' >> "$DOC_TALLY"; return 0; }
+
+detect_platform() {
+    PLAT_OS=$( (. /etc/os-release 2>/dev/null && printf '%s %s' "${NAME:-}" "${VERSION_ID:-}") || uname -s )
+    PLAT_ARCH=$(uname -m 2>/dev/null || echo '?')
+    if [ -r /proc/device-tree/model ]; then
+        PLAT_MODEL=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "")
+    else
+        PLAT_MODEL=""
+    fi
+    [ -n "$PLAT_MODEL" ] || PLAT_MODEL="$( have systemd-detect-virt && printf 'virt: %s' "$(systemd-detect-virt 2>/dev/null)" || echo unknown )"
+    if have systemctl && [ -d /run/systemd/system ]; then PLAT_INIT=systemd
+    elif have rc-service; then PLAT_INIT=openrc
+    elif have crontab; then PLAT_INIT=cron
+    else PLAT_INIT=none; fi
+    PLAT_PKG=none
+    for _pm in apt-get dnf yum apk pacman zypper; do
+        have "$_pm" && { PLAT_PKG="$_pm"; break; }
+    done
+}
+
+cmd_doctor() {
+    DOC_TALLY="${TMPDIR:-/tmp}/prayer-sync.tally.$$"; : > "$DOC_TALLY"
+    detect_platform
+    echo "prayer-sync $VERSION — diagnostics"
+    echo
+    echo "Platform"
+    _ok "os=$PLAT_OS arch=$PLAT_ARCH hw=$PLAT_MODEL"
+    _ok "init=$PLAT_INIT pkg=$PLAT_PKG"
+
+    echo
+    echo "Runtime"
+    if find_core 2>/dev/null; then
+        _ok "python: $PYTHON ($("$PYTHON" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null))"
+        _ok "core:   $CORE_PY"
+    else
+        _bad "python3 3.9+ or prayer_sync_core.py is missing — nothing can be scheduled"
+    fi
+    for _t in curl mpv bluetoothctl pactl amixer; do
+        have "$_t" && _ok "$_t present" || :
+    done
+    detect_player && _ok "player: $PLAYER_BIN" || _bad "no media player installed (mpv, ffplay, mpg123 or cvlc)"
+    [ -n "$TIMEOUT_BIN" ] || _warn "timeout(1) absent — using the built-in shell watchdog"
+
+    echo
+    echo "Clock and timezone"
+    config_load
+    _y=$(date '+%Y')
+    [ "$_y" -ge 2024 ] 2>/dev/null && _ok "system clock: $(date)" || _bad "system clock implausible: $(date)"
+    if [ -f "/usr/share/zoneinfo/$TZ_NAME" ] || [ "$TZ_NAME" = UTC ]; then
+        _ok "timezone $TZ_NAME (local $(TZ=$TZ_NAME date '+%H:%M'))"
+    else
+        _bad "timezone '$TZ_NAME' missing from tzdata — every time would be wrong"
+    fi
+
+    echo
+    echo "Configuration"
+    [ -f "$CONFIG_MAIN" ] && _ok "$CONFIG_MAIN present" || _warn "$CONFIG_MAIN missing (defaults in use)"
+    [ -f "$CONFIG_LOCAL" ] && _ok "$CONFIG_LOCAL present (device override)" || :
+    _m=$(cfg 'mosque' '?')
+    [ -f "$MOSQUE_DIR/$_m.json" ] && _ok "mosque preset '$_m'" || _warn "no preset for '$_m' in $MOSQUE_DIR"
+    _lat=$(cfg 'location.latitude' 0)
+    case "$_lat" in 0|0.0|"") _warn "no coordinates set — the offline fallback cannot compute times" ;;
+        *) _ok "location $_lat,$(cfg 'location.longitude' 0)  method=$(cfg 'calculation.method' ISNA)/$(cfg 'calculation.asr' standard)" ;;
+    esac
+
+    echo
+    echo "Timetable"
+    core status 2>/dev/null | while IFS="$TAB" read -r _k _v; do
+        case "$_k" in
+            timetable_date) [ "$_v" = none ] && _warn "no cached timetable yet" || _ok "cached timetable: $_v" ;;
+            stale_days)     [ "${_v:-9999}" -le 1 ] 2>/dev/null && _ok "timetable is current" || _warn "timetable is $_v day(s) old" ;;
+            source)         _ok "schedule source: $_v" ;;
+            offline_ok)     [ "$_v" = yes ] && _ok "offline computation works" || _bad "offline computation failed — no safety net" ;;
+            offline_times)  _ok "computed: $_v" ;;
+        esac
+    done
+
+    echo
+    echo "Stream"
+    _cands=$(resolve_stream 2>/dev/null)
+    if [ -n "$_cands" ]; then
+        printf '%s\n' "$_cands" | while read -r _c; do
+            stream_is_playable "$_c" && _ok "playable: $_c" || _warn "not playable: $_c"
+        done
+    else
+        _bad "no stream candidates could be resolved"
+    fi
+
+    echo
+    echo "Audio"
+    _devs=$(audio_devices 2>/dev/null)
+    if [ -n "$_devs" ]; then
+        printf '%s\n' "$_devs" | while IFS="$TAB" read -r _c _i _d; do _ok "$(printf '%-10s %s' "$_c" "$_i")"; done
+        for _need in bluetooth aux; do
+            if printf '%s\n' "$_devs" | cut -f1 | grep -qx "$_need"; then _ok "$_need output available"
+            else _warn "no $_need output detected"; fi
+        done
+    else
+        _bad "no audio outputs detected at all"
+    fi
+    if have bluetoothctl; then
+        _mac=$(cfg 'audio.bluetooth_mac' "")
+        [ -n "$_mac" ] || _mac=$(bt_paired_audio_mac 2>/dev/null) || _mac=""
+        if [ -n "$_mac" ]; then
+            bt_is_connected "$_mac" && _ok "bluetooth $_mac connected" || _warn "bluetooth $_mac paired but not connected"
+        else
+            _warn "no paired bluetooth speaker (fine if you use the 3.5 mm jack)"
+        fi
+    fi
+    have amixer && { amixer 2>/dev/null | grep -q '\[off\]' && _warn "an ALSA control is muted — prayer-sync unmutes before playing" || _ok "ALSA controls unmuted"; }
+
+    echo
+    echo "Service"
+    if [ "$PLAT_INIT" = systemd ]; then
+        systemctl is-enabled prayer-sync.service >/dev/null 2>&1 && _ok "service enabled" || _warn "service not enabled"
+        systemctl is-active  prayer-sync.service >/dev/null 2>&1 && _ok "service active"  || _warn "service not running"
+    else
+        crontab -l 2>/dev/null | grep -q prayer-sync && _ok "cron entry present" || _warn "no cron entry found"
+    fi
+
+    echo
+    echo "Today"
+    cmd_today 2>/dev/null | sed 's/^/  /'
+
+    echo
+    _nf=$(grep -c '^f$' "$DOC_TALLY" 2>/dev/null || echo 0)
+    _nw=$(grep -c '^w$' "$DOC_TALLY" 2>/dev/null || echo 0)
+    rm -f "$DOC_TALLY"; DOC_TALLY=""
+    if [ "${_nf:-0}" -gt 0 ]; then
+        echo "RESULT: $_nf failure(s), $_nw warning(s)"
+        return 1
+    fi
+    echo "RESULT: healthy ($_nw warning(s))"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Self-test — the data layer tests itself; this covers the shell side.
+# ---------------------------------------------------------------------------
+T_PASS=0; T_FAIL=0
+_t() {
+    if [ "$2" = "$3" ]; then T_PASS=$((T_PASS + 1))
+    else T_FAIL=$((T_FAIL + 1)); printf '  FAIL %s\n       expected [%s]\n       actual   [%s]\n' "$1" "$2" "$3"; fi
+    return 0
+}
+
+cmd_selftest() {
+    core selftest || return 1
+    echo
+    echo "prayer-sync $VERSION shell self-test"
+    config_load
+
+    echo
+    echo "wiring"
+    _missing=""
+    for _fn in have run_limited core config_load cfg cfg_array cfg_int cfg_bool \
+               resolve_stream stream_is_playable remember_good_stream \
+               audio_devices ordered_devices classify_device unmute_everything \
+               bt_ensure_connected detect_player play_attempt stop_playback run_window \
+               _sleep_bounded _nth_line _due_window _load_windows \
+               now_sec today_ymd sec_to_hm hms_to_sec _dec \
+               acquire_lock cleanup on_term in_quiet_hours detect_platform; do
+        command -v "$_fn" >/dev/null 2>&1 || _missing="$_missing $_fn"
+    done
+    _t "all shell functions defined" "" "$_missing"
+    _t "python located" "1" "$( find_core >/dev/null 2>&1 && echo 1 || echo 0)"
+    # The text tools this script genuinely depends on. awk is deliberately not
+    # among them: its dialect differences caused every portability bug here.
+    _deps=""
+    for _b in sed tr cut grep sort head wc date mkdir; do
+        command -v "$_b" >/dev/null 2>&1 || _deps="$_deps $_b"
+    done
+    _t "required text tools present" "" "$_deps"
+
+    echo "shell arithmetic (octal traps)"
+    _t "08 is decimal"  "8"  "$(_dec 08)"
+    _t "09 is decimal"  "9"  "$(_dec 09)"
+    _t "00 is zero"     "0"  "$(_dec 00)"
+    _t "000 is zero"    "0"  "$(_dec 000)"
+    _t "12 unchanged"   "12" "$(_dec 12)"
+    _t "sec_to_hm"      "21:35" "$(sec_to_hm 77700)"
+    _t "sec_to_hm zero" "00:00" "$(sec_to_hm 0)"
+    _t "sec_to_hm end"  "23:59" "$(sec_to_hm 86399)"
+    _t "hms_to_sec"     "77700" "$(hms_to_sec 21:35:00)"
+    _t "hms_to_sec HHMM" "77700" "$(hms_to_sec 21:35)"
+    _t "hms 08:30"      "30600" "$(hms_to_sec 08:30)"
+    _t "reject 24:00"   ""      "$(hms_to_sec 24:00 2>/dev/null)"
+    _t "reject junk"    ""      "$(hms_to_sec nope 2>/dev/null)"
+    _n=$(now_sec); _t "now_sec in range" "1" "$( [ "$_n" -ge 0 ] && [ "$_n" -lt 86400 ] && echo 1 || echo 0)"
+
+    echo "audio classification"
+    _t "bluez -> bluetooth" "bluetooth" "$(classify_device 'pulse/bluez_output.41_42_8C.1' 'JBL Flip 5')"
+    _t "headphones -> aux"  "aux"       "$(classify_device 'alsa/sysdefault:CARD=Headphones' 'bcm2835 Headphones')"
+    _t "vc4hdmi -> hdmi"    "hdmi"      "$(classify_device 'alsa/sysdefault:CARD=vc4hdmi0' 'vc4-hdmi-0')"
+    _t "usb -> usb"         "usb"       "$(classify_device 'pulse/alsa_output.usb-Generic.analog-stereo' 'USB Audio')"
+    _t "auto -> default"    "default"   "$(classify_device 'auto' 'Autoselect device')"
+    _t "analog -> aux"      "aux"       "$(classify_device 'pulse/alsa_output.platform-bcm2835_audio.analog-stereo' 'Built-in Audio')"
+
+    echo "mpv device-list parsing"
+    _mvout="${TMPDIR:-/tmp}/prayer-sync.mpvhelp.$$"
+    cat > "$_mvout" <<'MPVHELP'
+List of detected audio devices:
+  'auto' (Autoselect device)
+  'alsa/sysdefault:CARD=Headphones' (bcm2835 Headphones)
+  'pulse/bluez_output.41_42_8C_C6_B2_80.1' (JBL Flip 5)
+MPVHELP
+    _parsed=$(sed -n "s/^[[:space:]]*'\\([^']*\\)'[[:space:]]*(\\(.*\\))[[:space:]]*\$/\\1${TAB}\\2/p" "$_mvout")
+    _t "parsed 3 devices" "3" "$(printf '%s\n' "$_parsed" | grep -c .)"
+    _t "id extracted" "pulse/bluez_output.41_42_8C_C6_B2_80.1" "$(printf '%s\n' "$_parsed" | sed -n '3p' | cut -f1)"
+    _t "description extracted" "JBL Flip 5" "$(printf '%s\n' "$_parsed" | sed -n '3p' | cut -f2)"
+    rm -f "$_mvout"
+
+    echo "configuration lookups"
+    _t "mosque set"   "1"  "$( [ -n "$(cfg mosque '')" ] && echo 1 || echo 0)"
+    _t "int coercion" "42" "$(cfg_int 'nope.nothing' 42)"
+    _t "array reads"  "1"  "$( [ "$(cfg_array 'schedule.prayers' | grep -c .)" -ge 5 ] && echo 1 || echo 0)"
+    _t "exact key match, not prefix" "" "$(cfg 'schedule.tick' '')"
+
+    echo
+    if [ "$T_FAIL" -gt 0 ]; then
+        echo "SHELL SELF-TEST FAILED: $T_FAIL failed, $T_PASS passed"
+        return 1
+    fi
+    echo "SHELL SELF-TEST PASSED: $T_PASS checks"
+    return 0
+}
+
+usage() {
+    cat <<USAGE
+prayer-sync $VERSION — prayer-time stream scheduler
+
+  run                 run the scheduler in the foreground (used by systemd)
+  once                evaluate now and play if a window is open (for cron)
+  today               show today's schedule
+  times               locally computed prayer times
+  refresh             pull the latest timetable and config now
+  resolve             print the stream URLs that would be tried, in order
+  devices             list audio outputs and the order they will be tried
+  test-audio [secs]   play the live stream through the selected output
+  play <name|url>     play a named window or an arbitrary URL now
+  stop                stop any playback
+  doctor              full diagnostic report
+  selftest            run the built-in regression suite
+  config              print the fully merged configuration
+  version             print version
+
+Paths:
+  config     $PS_CONF_DIR/config.json  (+ config.local.json for device overrides)
+  mosques    $MOSQUE_DIR/
+  state      $PS_STATE_DIR
+  log        $PS_LOG_FILE
+USAGE
+}
+
+main() {
+    ensure_dirs
+    _cmd="${1:-}"; [ $# -gt 0 ] && shift
+    case "$_cmd" in
+        run)         cmd_run "$@" ;;
+        once)        cmd_once "$@" ;;
+        today)       cmd_today "$@" ;;
+        times)       cmd_times "$@" ;;
+        refresh)     cmd_refresh "$@" ;;
+        resolve)     cmd_resolve "$@" ;;
+        devices)     cmd_devices "$@" ;;
+        test-audio)  cmd_test_audio "$@" ;;
+        play)        cmd_play "$@" ;;
+        stop)        cmd_stop "$@" ;;
+        doctor)      cmd_doctor "$@" ;;
+        selftest)    cmd_selftest "$@" ;;
+        config)      cmd_config "$@" ;;
+        version)     echo "$VERSION" ;;
+        ''|-h|--help|help) usage ;;
+        *)           echo "unknown command: $_cmd" >&2; usage >&2; exit 2 ;;
+    esac
+}
+
+case "${PRAYER_SYNC_SOURCE_ONLY:-0}" in
+    1) : ;;
+    *) main "$@" ;;
+esac

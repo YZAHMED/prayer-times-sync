@@ -1,0 +1,107 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  edge:
+    name: edge (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The shell and its coreutils differ meaningfully between these, and a
+        # difference has silently broken scheduling before.
+        image: ['debian:bookworm-slim', 'ubuntu:24.04', 'alpine:3.20', 'fedora:40']
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install prerequisites
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+              python3 tzdata ca-certificates
+          elif command -v apk >/dev/null; then
+            apk add --no-cache python3 tzdata ca-certificates
+          elif command -v dnf >/dev/null; then
+            dnf install -y -q python3 tzdata ca-certificates
+          fi
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax (POSIX sh)
+        run: |
+          for f in edge/prayer-sync install.sh uninstall.sh; do
+            sh -n "$f" && echo "ok $f"
+          done
+
+      - name: Python syntax
+        run: python3 -m py_compile edge/prayer_sync_core.py
+
+      - name: Install and self-test
+        run: |
+          mkdir -p /etc/prayer-sync/mosques /usr/local/share/prayer-sync
+          cp config.json /etc/prayer-sync/
+          cp mosques/*.json /etc/prayer-sync/mosques/
+          install -m 0755 edge/prayer-sync /usr/local/bin/prayer-sync
+          install -m 0644 edge/prayer_sync_core.py /usr/local/share/prayer-sync/
+          prayer-sync selftest
+
+      - name: Schedule is produced offline (no network dependency)
+        run: |
+          printf '{"data":{"remote_base":""}}' > /etc/prayer-sync/config.local.json
+          prayer-sync today
+          # Five windows, correctly ordered, must exist with no timetable at all.
+          test "$(prayer-sync today | tail -n +5 | grep -c .)" -eq 5
+
+  dash:
+    name: strict POSIX shell (dash + shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq dash shellcheck
+      - name: Parse under dash
+        run: for f in edge/prayer-sync install.sh uninstall.sh; do dash -n "$f" && echo "ok $f"; done
+      - name: shellcheck (warnings are errors)
+        run: shellcheck -s sh -S warning edge/prayer-sync install.sh uninstall.sh
+
+  python:
+    name: python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is what Raspberry Pi OS bullseye ships; 3.11 is bookworm.
+        python: ['3.9', '3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Core self-test
+        run: python3 edge/prayer_sync_core.py selftest
+      - name: Lint
+        run: |
+          pip install -q pyflakes
+          python3 -m pyflakes edge/prayer_sync_core.py
+
+  data:
+    name: data files and CI tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JSON
+        run: |
+          for f in config.json prayers.json mosques/*.json package.json; do
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" && echo "ok $f"
+          done
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Syntax-check the CI tools
+        run: for f in tools/*.mjs; do node --check "$f" && echo "ok $f"; done
