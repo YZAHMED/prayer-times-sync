@@ -72,6 +72,7 @@ DEFAULTS = {
         "mixlr_slug": "",
         "fallback_urls": [],
         "fallback_file": "",
+        "fallback_files": {},
         "resolve_timeout_seconds": 12,
         "require_live": False,
     },
@@ -583,7 +584,7 @@ def resolve_mixlr(slug: str, timeout: int):
     return found
 
 
-def stream_candidates(cfg: dict):
+def stream_candidates(cfg: dict, prayer: str = ""):
     provider = cfg_get(cfg, "stream.provider", "static")
     timeout = int(cfg_get(cfg, "stream.resolve_timeout_seconds", 12) or 12)
     out = []
@@ -608,6 +609,13 @@ def stream_candidates(cfg: dict):
         except OSError:
             pass
 
+    # Per-prayer fallback file wins over the generic one — Fajr's adhan
+    # contains "as-salatu khayrun min an-nawm" and belongs only at Fajr.
+    if prayer:
+        per_prayer = cfg_get(cfg, "stream.fallback_files", {}) or {}
+        specific = per_prayer.get(prayer)
+        if specific and os.path.isfile(specific):
+            out.append(specific)
     local = cfg_get(cfg, "stream.fallback_file", "")
     if local and os.path.isfile(local):
         out.append(local)
@@ -867,7 +875,7 @@ def main(argv) -> int:
             print(f"{name}\t{sec_to_hms(int(round((hours % 24) * 3600))) if hours is not None else 'INVALID'}")
         return 0 if times else 1
     if command == "resolve":
-        found = stream_candidates(cfg)
+        found = stream_candidates(cfg, args[0] if args else "")
         for url in found:
             print(url)
         return 0 if found else 1
@@ -1009,6 +1017,31 @@ def run_selftest() -> int:
           anchor_value(single_prayers(doc)[1], ["prayerBegins"]))
     check("missing timetable is not fatal", None, timetable_date(None))
     check("html is not a timetable", None, timetable_date("<html>404</html>"))
+
+    print("fallback file selection")
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        generic = os.path.join(td, "adhan.mp3")
+        fajr    = os.path.join(td, "adhan-fajr.mp3")
+        open(generic, "wb").close()
+        open(fajr, "wb").close()
+        cfg = json.loads(json.dumps(DEFAULTS))
+        cfg["stream"]["provider"] = "static"
+        cfg["stream"]["url"] = "https://example.org/stream.mp3"
+        cfg["stream"]["fallback_file"]  = generic
+        cfg["stream"]["fallback_files"] = {"Fajr": fajr}
+        check("Fajr picks Fajr-specific file first", True,
+              stream_candidates(cfg, "Fajr").index(fajr) <
+              stream_candidates(cfg, "Fajr").index(generic))
+        check("Dhuhr does not include Fajr file", False,
+              fajr in stream_candidates(cfg, "Dhuhr"))
+        check("no-prayer call skips per-prayer files", False,
+              fajr in stream_candidates(cfg, ""))
+        # If per-prayer file goes missing (e.g. install stripped) the caller
+        # must still see the generic file — silence is worse than the wrong adhan.
+        os.unlink(fajr)
+        check("missing per-prayer file falls through to generic",
+              True, generic in stream_candidates(cfg, "Fajr"))
 
     print("history parser")
     sample = [

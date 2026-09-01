@@ -240,7 +240,7 @@ run_limited() {
 # ---------------------------------------------------------------------------
 # Streams
 # ---------------------------------------------------------------------------
-resolve_stream() { core resolve; }
+resolve_stream() { core resolve "$@"; }
 
 stream_is_playable() {
     case "$1" in /*) [ -f "$1" ] && return 0 || return 1 ;; esac
@@ -517,7 +517,7 @@ run_window() { # run_window NAME WINDOW_START WINDOW_END
     _ndev=$(wc -l < "$_devlist" | tr -d ' ')
 
     _urllist="${TMPDIR:-/tmp}/prayer-sync.urllist.$$"
-    resolve_stream > "$_urllist" 2>/dev/null || : > "$_urllist"
+    resolve_stream "$_name" > "$_urllist" 2>/dev/null || : > "$_urllist"
     _nurl=$(wc -l < "$_urllist" | tr -d ' ')
 
     if [ "${_nurl:-0}" -eq 0 ]; then
@@ -538,7 +538,7 @@ run_window() { # run_window NAME WINDOW_START WINDOW_END
         # Retry sooner while there is nothing at all to play.
         _requiz=120; [ "${_nurl:-0}" -eq 0 ] && _requiz=20
         if [ $((_now - _last_resolve)) -ge "$_requiz" ]; then
-            if resolve_stream > "$_urllist.new" 2>/dev/null && [ -s "$_urllist.new" ]; then
+            if resolve_stream "$_name" > "$_urllist.new" 2>/dev/null && [ -s "$_urllist.new" ]; then
                 mv -f "$_urllist.new" "$_urllist"
             fi
             rm -f "$_urllist.new"

@@ -239,6 +239,8 @@ config.json                 fleet-wide settings
 mosques/*.json              one file per mosque
 edge/prayer-sync            orchestrator: player, audio, signals (POSIX sh)
 edge/prayer_sync_core.py    data layer: config, timetable, prayer maths
+share/adhan.mp3             offline fallback adhan (Makkah, played only when every stream fails)
+share/adhan-fajr.mp3        offline fallback for Fajr specifically ("as-salatu khayrun min an-nawm")
 install.sh / uninstall.sh   provisioning
 tools/update_prayers.py     CI: fetch and validate the timetable
 tools/resolve_stream.py     CI: refresh the fallback stream URL (shares the device's resolver)

@@ -5,12 +5,15 @@
   "mosque": "masjid-el-noor",
 
   "stream": {
-    "$comment": "provider: mixlr | static | icecast. Resolved fresh at play time, never trusted from cache alone.",
+    "$comment": "provider: mixlr | static | icecast. Resolved fresh at play time, never trusted from cache alone. fallback_files.NAME overrides fallback_file for that specific prayer — Fajr uses a Fajr-specific adhan (with 'as-salatu khayrun min an-nawm').",
     "provider": "mixlr",
     "mixlr_slug": "masjid-el-noor",
     "url": null,
     "fallback_urls": [],
     "fallback_file": "/usr/local/share/prayer-sync/adhan.mp3",
+    "fallback_files": {
+      "Fajr": "/usr/local/share/prayer-sync/adhan-fajr.mp3"
+    },
     "resolve_timeout_seconds": 12,
     "require_live": false
   },

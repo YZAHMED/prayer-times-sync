@@ -234,11 +234,16 @@ if [ -f "$SRC_DIR/edge/prayer-sync" ]; then
     # settings belong in config.local.json, which is never overwritten.
     [ -f "$SRC_DIR/config.json" ] && cp "$SRC_DIR/config.json" "$CONF_DIR/config.json"
     for m in "$SRC_DIR"/mosques/*.json; do [ -f "$m" ] && cp "$m" "$CONF_DIR/mosques/"; done
+    for a in "$SRC_DIR"/share/*.mp3; do [ -f "$a" ] && cp "$a" "$SHARE_DIR/"; done
     ok "installed from local checkout"
 else
     get "edge/prayer-sync" "$BIN_DIR/prayer-sync" || fail "could not download prayer-sync from $REPO"
     get "edge/prayer_sync_core.py" "$SHARE_DIR/prayer_sync_core.py" || fail "could not download prayer_sync_core.py from $REPO"
     get "config.json" "$CONF_DIR/config.json"     || warn "could not download config.json"
+    # Adhan fallback files — used only when every stream candidate fails. If
+    # they don't download the daemon still runs, just silent in that edge case.
+    get "share/adhan.mp3"      "$SHARE_DIR/adhan.mp3"      || warn "could not download adhan.mp3 fallback"
+    get "share/adhan-fajr.mp3" "$SHARE_DIR/adhan-fajr.mp3" || warn "could not download adhan-fajr.mp3 fallback"
     ok "downloaded from $REPO"
 fi
 chmod 0755 "$BIN_DIR/prayer-sync"
