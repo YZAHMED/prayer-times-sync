@@ -776,7 +776,7 @@ cmd_today() {
 }
 
 cmd_refresh() { config_load; core refresh && echo "refreshed" || { echo "refresh failed (cached data still in use)"; return 1; }; }
-cmd_resolve() { config_load; resolve_stream; }
+cmd_resolve() { config_load; resolve_stream "$@"; }
 cmd_times()   { config_load; core times; }
 cmd_config()  { config_load; sort "$MERGED_CFG"; }
 
