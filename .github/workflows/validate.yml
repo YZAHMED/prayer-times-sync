@@ -89,7 +89,7 @@ jobs:
       - name: Lint
         run: |
           pip install -q pyflakes
-          python3 -m pyflakes edge/prayer_sync_core.py
+          python3 -m pyflakes edge/prayer_sync_core.py tools/*.py
 
   data:
     name: data files and CI tools
@@ -98,10 +98,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate JSON
         run: |
-          for f in config.json prayers.json mosques/*.json package.json; do
+          for f in config.json prayers.json mosques/*.json; do
             python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f" && echo "ok $f"
           done
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
       - name: Syntax-check the CI tools
-        run: for f in tools/*.mjs; do node --check "$f" && echo "ok $f"; done
+        run: for f in tools/*.py; do python3 -m py_compile "$f" && echo "ok $f"; done

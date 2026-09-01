@@ -23,38 +23,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      # No npm install: both scripts use only the Node standard library now,
-      # so there is no dependency tree and no Chromium download to fail.
+      # ubuntu-latest ships python3; neither script has any third-party deps,
+      # so there is nothing to install and nothing to update.
 
       - name: Fetch timetable
         id: prayers
         env:
           PRAYER_API_KEY: ${{ secrets.PRAYER_API_KEY }}
           PRAYER_API_BASE_URL: ${{ secrets.PRAYER_API_BASE_URL }}
-        run: node tools/update_prayers.mjs
+        run: python3 tools/update_prayers.py
 
       - name: Resolve fallback stream URL
         id: stream
         continue-on-error: true      # devices resolve this themselves at play time
-        run: node tools/resolve_stream.mjs
+        run: python3 tools/resolve_stream.py
 
       - name: Write status heartbeat
         run: |
-          node -e '
-            const fs = require("fs");
-            const p = JSON.parse(fs.readFileSync("prayers.json", "utf8"));
-            const url = fs.existsSync("stream_url.txt") ? fs.readFileSync("stream_url.txt","utf8").trim() : "";
-            fs.writeFileSync("status.json", JSON.stringify({
-              updated_at: new Date().toISOString(),
-              prayer_date: p?.data?.prayerOfDay?.prayerDate ?? null,
-              mosque: p?.data?.name ?? null,
-              stream_url: url,
-            }, null, 2) + "\n");
-          '
+          python3 - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          with open("prayers.json", encoding="utf-8") as fh:
+              p = json.load(fh)
+          url = ""
+          if os.path.exists("stream_url.txt"):
+              with open("stream_url.txt", encoding="utf-8") as fh:
+                  url = fh.read().strip()
+          status = {
+              "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "prayer_date": ((p.get("data") or {}).get("prayerOfDay") or {}).get("prayerDate"),
+              "mosque": (p.get("data") or {}).get("name"),
+              "stream_url": url,
+          }
+          with open("status.json", "w", encoding="utf-8") as fh:
+              json.dump(status, fh, indent=2)
+              fh.write("\n")
+          PY
 
       - name: Commit and push
         env:

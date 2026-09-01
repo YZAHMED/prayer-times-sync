@@ -239,8 +239,8 @@ mosques/*.json              one file per mosque
 edge/prayer-sync            orchestrator: player, audio, signals (POSIX sh)
 edge/prayer_sync_core.py    data layer: config, timetable, prayer maths
 install.sh / uninstall.sh   provisioning
-tools/update_prayers.mjs    CI: fetch and validate the timetable
-tools/resolve_stream.mjs    CI: refresh the fallback stream URL
+tools/update_prayers.py     CI: fetch and validate the timetable
+tools/resolve_stream.py     CI: refresh the fallback stream URL (shares the device's resolver)
 prayers.json                published timetable (written by CI)
 stream_url.txt              published fallback URL (written by CI)
 status.json                 last-update heartbeat
@@ -257,7 +257,7 @@ The `aladhan` provider needs neither.
 
 ### CI
 
-`update-data.yml` runs twice daily, validates the payload (right date, all five prayers present, times parseable) before committing, retries on push races, and opens a GitHub issue if it fails. It has **no npm dependencies** — Puppeteer and its Chromium download are gone.
+`update-data.yml` runs twice daily, validates the payload (right date, all five prayers present, times parseable) before committing, retries on push races, and opens a GitHub issue if it fails. It has **no dependencies at all** — everything runs on the Python standard library, and the stream resolver is imported from `edge/prayer_sync_core.py` so CI and devices cannot drift.
 
 `validate.yml` runs on every push: POSIX syntax checks under `dash`, shellcheck with warnings treated as errors, the full self-test inside Debian, Ubuntu, Alpine and Fedora containers, the core suite against Python 3.9/3.11/3.13, and a check that a correct five-prayer schedule is still produced with no network and no cached timetable at all.
 
