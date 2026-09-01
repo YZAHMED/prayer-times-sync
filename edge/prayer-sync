@@ -964,10 +964,13 @@ cmd_doctor() {
     cmd_today 2>/dev/null | sed 's/^/  /'
 
     echo
-    _nf=$(grep -c '^f$' "$DOC_TALLY" 2>/dev/null || echo 0)
-    _nw=$(grep -c '^w$' "$DOC_TALLY" 2>/dev/null || echo 0)
+    # grep -c prints the count to stdout AND exits 1 on zero matches, so an
+    # `|| echo 0` fallback would double-print and leave _nf="0\n0", tripping
+    # `[ -gt 0 ]` with "Illegal number". Just take stdout and default if empty.
+    _nf=$(grep -c '^f$' "$DOC_TALLY" 2>/dev/null); _nf=${_nf:-0}
+    _nw=$(grep -c '^w$' "$DOC_TALLY" 2>/dev/null); _nw=${_nw:-0}
     rm -f "$DOC_TALLY"; DOC_TALLY=""
-    if [ "${_nf:-0}" -gt 0 ]; then
+    if [ "$_nf" -gt 0 ]; then
         echo "RESULT: $_nf failure(s), $_nw warning(s)"
         return 1
     fi
