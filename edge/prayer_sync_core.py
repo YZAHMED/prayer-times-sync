@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 import urllib.error
 import time
@@ -734,6 +735,99 @@ def cmd_status(cfg: dict) -> int:
     return 0
 
 
+HISTORY_RE_TS      = re.compile(r'(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})')
+HISTORY_RE_OPEN    = re.compile(r'([A-Za-z]+): window open (\d{2}:\d{2})-(\d{2}:\d{2})')
+HISTORY_RE_PLAYED  = re.compile(r'([A-Za-z]+): window complete \((\d+)s of audio\)')
+HISTORY_RE_FAILED  = re.compile(r'([A-Za-z]+): window ended with no successful playback')
+HISTORY_RE_START   = re.compile(r'prayer-sync \S+ starting')
+HISTORY_RE_STOP    = re.compile(r'shutting down')
+
+
+def _history_events(lines):
+    """Yield (date, time, kind, name, detail) for lines this parser understands.
+    kind is one of open/played/failed/start/stop; other lines are ignored."""
+    for line in lines:
+        m = HISTORY_RE_TS.search(line)
+        if not m:
+            continue
+        d, t = m.group(1), m.group(2)
+        om = HISTORY_RE_OPEN.search(line)
+        if om:
+            yield d, t, "open", om.group(1), f"{om.group(2)}-{om.group(3)}"
+            continue
+        pm = HISTORY_RE_PLAYED.search(line)
+        if pm:
+            yield d, t, "played", pm.group(1), f"{pm.group(2)}s"
+            continue
+        fm = HISTORY_RE_FAILED.search(line)
+        if fm:
+            yield d, t, "failed", fm.group(1), "no successful playback"
+            continue
+        if HISTORY_RE_START.search(line):
+            yield d, t, "start", "-", "-"
+            continue
+        if HISTORY_RE_STOP.search(line):
+            yield d, t, "stop", "-", "-"
+
+
+def _history_pair(events):
+    """Pair each 'open' with the next matching 'played'/'failed'/'stop', so a
+    caller sees one row per prayer window with a clear outcome."""
+    rows = []
+    pending = None
+    for d, t, kind, name, detail in events:
+        if kind == "open":
+            if pending:
+                rows.append(pending + ("UNKNOWN", "no completion recorded"))
+            pending = (d, t, name, detail)
+        elif kind == "played" and pending and pending[2] == name:
+            rows.append(pending + ("PLAYED", detail))
+            pending = None
+        elif kind == "failed" and pending and pending[2] == name:
+            rows.append(pending + ("MISSED", detail))
+            pending = None
+        elif kind == "stop" and pending:
+            rows.append(pending + ("MISSED", "service stopped mid-window"))
+            pending = None
+    if pending:
+        rows.append(pending + ("RUNNING", "in progress"))
+    return rows
+
+
+def cmd_history(argv) -> int:
+    if not argv:
+        warn("usage: history <log-file>")
+        return 2
+    path = argv[0]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            events = list(_history_events(fh))
+    except OSError as exc:
+        warn(f"cannot read {path}: {exc}")
+        return 1
+
+    rows = _history_pair(events)
+    headers = ("DATE", "TIME", "PRAYER", "WINDOW", "STATUS", "NOTE")
+    all_rows = [headers] + rows
+    widths = [max(len(str(r[i])) for r in all_rows) for i in range(6)]
+    for r in all_rows:
+        print("  ".join(str(r[i]).ljust(widths[i]) for i in range(6)).rstrip())
+
+    played  = sum(1 for r in rows if r[4] == "PLAYED")
+    missed  = sum(1 for r in rows if r[4] == "MISSED")
+    unknown = sum(1 for r in rows if r[4] == "UNKNOWN")
+    running = sum(1 for r in rows if r[4] == "RUNNING")
+    starts  = sum(1 for e in events if e[2] == "start")
+    parts = [f"{played} played"]
+    if missed:  parts.append(f"{missed} missed")
+    if unknown: parts.append(f"{unknown} unknown")
+    if running: parts.append(f"{running} in progress")
+    parts.append(f"service started {starts} time(s) in this range")
+    print()
+    print("summary: " + ", ".join(parts))
+    return 0
+
+
 def main(argv) -> int:
     if not argv:
         print(__doc__)
@@ -745,6 +839,8 @@ def main(argv) -> int:
         return 0
     if command == "selftest":
         return run_selftest()
+    if command == "history":
+        return cmd_history(args)
 
     cfg = load_config()
 
@@ -913,6 +1009,34 @@ def run_selftest() -> int:
           anchor_value(single_prayers(doc)[1], ["prayerBegins"]))
     check("missing timetable is not fatal", None, timetable_date(None))
     check("html is not a timetable", None, timetable_date("<html>404</html>"))
+
+    print("history parser")
+    sample = [
+        # journalctl short-iso prepends its own timestamp; the app also
+        # timestamps its own lines. The parser must handle both.
+        "2026-08-31T05:29:00+0400 homepi prayer-sync[1]: 2026-08-31T05:29:00+0400 [INFO] prayer-sync 2.0.0 starting",
+        "2026-08-31T05:30:00+0400 [INFO] Fajr: window open 05:30-06:00",
+        "2026-08-31T05:34:22+0400 [INFO] Fajr: window complete (262s of audio)",
+        "2026-08-31T13:30:00+0400 [INFO] Dhuhr: window open 13:30-14:00",
+        "2026-08-31T14:00:00+0400 [ERROR] Dhuhr: window ended with no successful playback",
+        "2026-08-31T17:59:00+0400 [INFO] Asr: window open 18:00-18:30",
+        "2026-08-31T18:15:00+0400 [INFO] shutting down",
+        "-- Boot 12345 --",  # journalctl noise; must be ignored
+    ]
+    ev = list(_history_events(sample))
+    check("start recognised", "start", ev[0][2])
+    check("plain-app line recognised", "open", ev[1][2])
+    check("played extracted with seconds", ("Fajr", "262s"), (ev[2][3], ev[2][4]))
+    check("failed recognised", "failed", ev[4][2])
+    check("stop recognised", "stop", ev[6][2])
+    check("noise line skipped", 7, len(ev))
+
+    rows = _history_pair(ev)
+    check("three windows paired", 3, len(rows))
+    check("Fajr played", ("Fajr", "PLAYED", "262s"), (rows[0][2], rows[0][4], rows[0][5]))
+    check("Dhuhr missed", ("Dhuhr", "MISSED"), (rows[1][2], rows[1][4]))
+    check("Asr cut short by service stop", ("Asr", "MISSED", "service stopped mid-window"),
+          (rows[2][2], rows[2][4], rows[2][5]))
 
     print()
     if failed:

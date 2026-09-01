@@ -780,6 +780,39 @@ cmd_resolve() { config_load; resolve_stream; }
 cmd_times()   { config_load; core times; }
 cmd_config()  { config_load; sort "$MERGED_CFG"; }
 
+# cmd_history [DAYS] — per-prayer PLAYED/MISSED report from the daemon log.
+# Prefers journalctl; falls back to the app's rotated log file for cron installs.
+cmd_history() {
+    _days="${1:-1}"
+    case "$_days" in
+        ''|*[!0-9]*) die "usage: prayer-sync history [DAYS]" ;;
+    esac
+    [ "$_days" -gt 0 ] 2>/dev/null || die "days must be at least 1"
+
+    _hist="${TMPDIR:-/tmp}/prayer-sync.hist.$$"
+    : > "$_hist"
+
+    if have journalctl && systemctl list-unit-files 2>/dev/null | grep -q '^prayer-sync\.service'; then
+        journalctl -u prayer-sync.service --since "${_days} days ago" \
+                   --no-pager --output=short-iso 2>/dev/null > "$_hist" || :
+    fi
+
+    if [ ! -s "$_hist" ]; then
+        [ -f "$PS_LOG_FILE.1" ] && cat "$PS_LOG_FILE.1" >> "$_hist"
+        [ -f "$PS_LOG_FILE" ]   && cat "$PS_LOG_FILE"   >> "$_hist"
+    fi
+
+    if [ ! -s "$_hist" ]; then
+        rm -f "$_hist"
+        die "no logs found (checked journalctl and $PS_LOG_FILE)"
+    fi
+
+    core history "$_hist"
+    _rc=$?
+    rm -f "$_hist"
+    return $_rc
+}
+
 cmd_devices() {
     config_load
     printf '%-11s %-52s %s\n' CLASS DEVICE DESCRIPTION
@@ -1084,6 +1117,7 @@ prayer-sync $VERSION — prayer-time stream scheduler
   play <name|url>     play a named window or an arbitrary URL now
   stop                stop any playback
   doctor              full diagnostic report
+  history [DAYS]      per-prayer PLAYED/MISSED report for the last N days (default 1)
   selftest            run the built-in regression suite
   config              print the fully merged configuration
   version             print version
@@ -1111,6 +1145,7 @@ main() {
         play)        cmd_play "$@" ;;
         stop)        cmd_stop "$@" ;;
         doctor)      cmd_doctor "$@" ;;
+        history)     cmd_history "$@" ;;
         selftest)    cmd_selftest "$@" ;;
         config)      cmd_config "$@" ;;
         version)     echo "$VERSION" ;;

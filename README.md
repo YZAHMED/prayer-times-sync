@@ -216,7 +216,8 @@ It **never rewrites the crontab**. v1 wiped and rebuilt it nightly, so a single 
 prayer-sync today               today's schedule
 prayer-sync times               locally computed prayer times
 prayer-sync doctor              full health report
-prayer-sync selftest            77-check regression suite
+prayer-sync history [DAYS]      per-prayer PLAYED/MISSED report from the daemon log
+prayer-sync selftest            regression suite
 prayer-sync devices             audio outputs and their priority
 prayer-sync test-audio [secs]   play the live stream right now
 prayer-sync resolve             stream URLs that would be tried, in order
