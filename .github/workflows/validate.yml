@@ -103,3 +103,5 @@ jobs:
           done
       - name: Syntax-check the CI tools
         run: for f in tools/*.py; do python3 -m py_compile "$f" && echo "ok $f"; done
+      - name: Publisher tests (offline)
+        run: python3 tools/test_update_prayers.py

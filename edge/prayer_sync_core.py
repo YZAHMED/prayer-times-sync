@@ -644,7 +644,18 @@ def cmd_refresh(cfg: dict) -> int:
     retries = int(cfg_get(cfg, "data.refresh_retries", 3) or 3)
     ok = False
 
-    doc = http_get(f"{base}/prayers.json", timeout, retries)
+    mosque = str(cfg_get(cfg, "mosque", "") or "")
+    # Each mosque has its own published timetable. The root prayers.json is
+    # the default mosque's (legacy files without mosqueId were masjid-el-noor)
+    # and is only used when it is for THIS mosque.
+    root = http_get(f"{base}/prayers.json", timeout, retries)
+    default_id = (root.get("mosqueId") or "masjid-el-noor") if isinstance(root, dict) else None
+    doc = http_get(f"{base}/data/{mosque}/prayers.json", timeout, retries) if mosque else None
+    if not (isinstance(doc, dict) and timetable_date(doc)) and default_id == mosque:
+        doc = root
+    if isinstance(doc, dict) and doc.get("mosqueId") not in (None, mosque):
+        warn(f"[WARN] timetable is for '{doc.get('mosqueId')}', not '{mosque}'; ignoring it")
+        doc = None
     if isinstance(doc, dict) and timetable_date(doc) and single_prayers(doc):
         atomic_write(prayers_path(), json.dumps(doc, indent=2) + "\n")
         print(f"[INFO] timetable refreshed (for {timetable_date(doc)})")
@@ -661,7 +672,14 @@ def cmd_refresh(cfg: dict) -> int:
         if isinstance(got, dict):
             atomic_write(local, json.dumps(got, indent=2) + "\n")
 
-    text = http_get(f"{base}/stream_url.txt", 15, 2, want_json=False)
+    # stream_url.txt is resolved for the default mosque only: never let another
+    # mosque fall back to it.
+    text = http_get(f"{base}/stream_url.txt", 15, 2, want_json=False) if default_id == mosque else None
+    if default_id != mosque:
+        try:
+            os.remove(os.path.join(STATE_DIR, "stream_url.txt"))
+        except OSError:
+            pass
     if isinstance(text, str):
         first = text.strip().splitlines()[0].strip() if text.strip() else ""
         if first.startswith("http"):

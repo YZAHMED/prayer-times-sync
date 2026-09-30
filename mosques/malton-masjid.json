@@ -1,0 +1,26 @@
+{
+  "id": "malton-masjid",
+  "name": "Malton Masjid (Anjuman-E Anwarul Islam of Malton)",
+  "city": "Mississauga",
+  "address": "7097 Airport Rd, Mississauga, ON L4T 2G7",
+  "website": "https://maltonmasjid.ad-din.site/",
+  "timezone": "America/Toronto",
+  "location": {
+    "latitude": 43.7063854,
+    "longitude": -79.6444834,
+    "elevation": 0
+  },
+  "stream": {
+    "provider": "static",
+    "url": "https://relay.livemasjid.com:8443/maltonmasjid"
+  },
+  "timetable": {
+    "provider": "masjidal",
+    "masjid_id": 3
+  },
+  "calculation": {
+    "method": "ISNA",
+    "asr": "hanafi",
+    "high_latitude": "angle_based"
+  }
+}
