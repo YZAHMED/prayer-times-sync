@@ -1,0 +1,27 @@
+{
+  "id": "islamic-society-of-toronto",
+  "name": "Islamic Society of Toronto (Masjid Darus Salaam)",
+  "city": "Toronto",
+  "address": "20 Overlea Blvd, Toronto, ON M4H 1A4",
+  "website": "https://www.islamicsocietyoftoronto.com/",
+  "timezone": "America/Toronto",
+  "location": {
+    "latitude": 43.7046555,
+    "longitude": -79.3514705,
+    "elevation": 0
+  },
+  "stream": {
+    "provider": "mixlr",
+    "mixlr_slug": "masjid-darus-salaam"
+  },
+  "timetable": {
+    "provider": "galaxystream",
+    "uid": 6
+  },
+  "calculation": {
+    "method": "ISNA",
+    "asr": "hanafi",
+    "isha_angle": 14,
+    "high_latitude": "angle_based"
+  }
+}

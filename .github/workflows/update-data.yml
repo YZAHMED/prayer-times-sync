@@ -31,7 +31,7 @@ jobs:
         env:
           PRAYER_API_KEY: ${{ secrets.PRAYER_API_KEY }}
           PRAYER_API_BASE_URL: ${{ secrets.PRAYER_API_BASE_URL }}
-        run: python3 tools/update_prayers.py
+        run: python3 tools/update_prayers.py --all   # data/<mosque>/prayers.json for every preset + prayers.json for the default
 
       - name: Resolve fallback stream URL
         id: stream
@@ -76,9 +76,9 @@ jobs:
           # So: take the latest remote state, lay our generated files over it,
           # and commit that. This cannot conflict.
           GEN=$(mktemp -d)
-          FILES="prayers.json stream_url.txt status.json"
+          FILES="prayers.json stream_url.txt status.json $(find data -name prayers.json 2>/dev/null | sort | tr '\n' ' ')"
           for f in $FILES; do
-            [ -f "$f" ] && cp "$f" "$GEN/$f"
+            [ -f "$f" ] && mkdir -p "$(dirname "$GEN/$f")" && cp "$f" "$GEN/$f"
           done
 
           for attempt in 1 2 3; do
@@ -88,7 +88,7 @@ jobs:
             present=""
             for f in $FILES; do
               if [ -f "$GEN/$f" ]; then
-                cp "$GEN/$f" "$f"
+                mkdir -p "$(dirname "$f")" && cp "$GEN/$f" "$f"
                 present="$present $f"
               fi
             done
