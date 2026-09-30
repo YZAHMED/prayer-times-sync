@@ -1,9 +1,9 @@
 {
   "data": {
-    "masjidID": 11,
-    "name": "Masjid-El-Noor",
+    "masjidID": 359,
+    "name": "Masjid Zakariya",
     "city": "Toronto",
-    "hasThirtyDays": false,
+    "hasThirtyDays": true,
     "updateAfterSunset": true,
     "prayers": null,
     "prayerOfDay": {
@@ -19,9 +19,9 @@
       "singlePrayers": [
         {
           "prayerName": "Fajr",
-          "prayerBegins": "05:55:00",
-          "prayerAdhan": "06:05:00",
-          "prayerIqamah": "06:15:00"
+          "prayerBegins": "05:38:00",
+          "prayerAdhan": "06:15:00",
+          "prayerIqamah": "06:30:00"
         },
         {
           "prayerName": "Sunrise",
@@ -31,63 +31,75 @@
         },
         {
           "prayerName": "Zawal",
-          "prayerBegins": "13:08:00",
-          "prayerAdhan": "13:08:00",
-          "prayerIqamah": "13:08:00"
+          "prayerBegins": "13:06:00",
+          "prayerAdhan": "13:01:00",
+          "prayerIqamah": "13:07:00"
         },
         {
           "prayerName": "Dhuhr",
-          "prayerBegins": "13:08:00",
-          "prayerAdhan": "13:35:00",
+          "prayerBegins": "13:07:00",
+          "prayerAdhan": "13:30:00",
           "prayerIqamah": "13:45:00"
         },
         {
           "prayerName": "Asr",
-          "prayerBegins": "17:13:00",
-          "prayerAdhan": "17:20:00",
-          "prayerIqamah": "17:30:00"
+          "prayerBegins": "17:11:00",
+          "prayerAdhan": "17:30:00",
+          "prayerIqamah": "17:40:00"
         },
         {
           "prayerName": "Sunset",
           "prayerBegins": null,
-          "prayerAdhan": "19:01:00",
+          "prayerAdhan": "18:58:00",
           "prayerIqamah": null
         },
         {
           "prayerName": "Maghrib",
-          "prayerBegins": "19:01:00",
-          "prayerAdhan": "19:03:00",
-          "prayerIqamah": "19:06:00"
+          "prayerBegins": "18:58:00",
+          "prayerAdhan": "19:01:00",
+          "prayerIqamah": "19:01:00"
         },
         {
           "prayerName": "Isha",
-          "prayerBegins": "20:20:00",
-          "prayerAdhan": "20:20:00",
-          "prayerIqamah": "20:30:00"
+          "prayerBegins": "20:17:00",
+          "prayerAdhan": "20:53:00",
+          "prayerIqamah": "21:00:00"
+        },
+        {
+          "prayerName": "Jumah",
+          "prayerBegins": "13:07:00",
+          "prayerAdhan": "13:30:00",
+          "prayerIqamah": "13:50:00"
+        },
+        {
+          "prayerName": "Jumah 2",
+          "prayerBegins": "13:07:00",
+          "prayerAdhan": "15:10:00",
+          "prayerIqamah": "15:30:00"
         },
         {
           "prayerName": "Al-Duha",
           "prayerBegins": null,
-          "prayerAdhan": "07:14:00",
-          "prayerIqamah": "13:08:00"
+          "prayerAdhan": "07:29:00",
+          "prayerIqamah": "12:56:00"
         },
         {
           "prayerName": "FirstThirdofNight",
           "prayerBegins": null,
-          "prayerAdhan": "19:01:00",
-          "prayerIqamah": "22:39:00"
+          "prayerAdhan": "18:58:00",
+          "prayerIqamah": "22:31:20"
         },
         {
           "prayerName": "IslamicMidnight",
-          "prayerBegins": "1.00:28:00",
+          "prayerBegins": "1.00:18:00",
           "prayerAdhan": null,
           "prayerIqamah": null
         },
         {
           "prayerName": "LastThirdofNight",
           "prayerBegins": null,
-          "prayerAdhan": "02:17:00",
-          "prayerIqamah": "05:55:00"
+          "prayerAdhan": "02:04:40",
+          "prayerIqamah": "05:38:00"
         }
       ]
     }
@@ -97,5 +109,5 @@
   "localizedMessage": "Successfully loaded Prayer Times",
   "localizedErrorLink": null,
   "localizedErrorLinkText": null,
-  "mosqueId": "masjid-el-noor"
+  "mosqueId": "masjid-zakariya"
 }
