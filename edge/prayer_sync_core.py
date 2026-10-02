@@ -492,6 +492,11 @@ def build_windows(cfg: dict, when: date, tz: ZoneInfo):
         stop_key = cfg_get(cfg, "schedule.stop_anchor", "prayerIqamah")
         for name in todays_prayers(cfg, when):
             entry = by_name.get(name)
+            if not entry and name == "Jumah":
+                # Most timetables (Masjid El-Noor's since August 2026) carry no
+                # Jumah row: use Dhuhr's times, as the offline calculation does,
+                # rather than dropping Friday's prayer.
+                entry = by_name.get("Dhuhr")
             if not entry:
                 warn(f"[WARN] {name} is absent from the timetable — skipped")
                 continue
@@ -1096,6 +1101,38 @@ def run_selftest() -> int:
             check("config.local.json still wins over both", "local", load_config().get("city"))
     finally:
         CONF_DIR, STATE_DIR = saved
+
+    print("Jumah windows from a timetable")
+    saved = STATE_DIR
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            STATE_DIR = td
+            cfg = json.loads(json.dumps(DEFAULTS))
+            cfg["offsets"] = {"default": {"pre": 5, "post": 15}, "Jumah": {"pre": 10, "post": 20}}
+            tz = ZoneInfo("America/Toronto")
+            friday = date(2026, 10, 2)
+            def timetable(rows):
+                with open(prayers_path(), "w", encoding="utf-8") as fh:
+                    json.dump({"data": {"prayerOfDay": {"prayerDate": "2026-10-02T00:00:00",
+                        "singlePrayers": [{"prayerName": n, "prayerBegins": a, "prayerAdhan": a,
+                                           "prayerIqamah": q} for n, a, q in rows]}}}, fh)
+            day = [("Fajr", "06:05:00", "06:15:00"), ("Dhuhr", "13:35:00", "13:45:00"),
+                   ("Asr", "17:20:00", "17:30:00"), ("Maghrib", "18:59:00", "19:02:00"),
+                   ("Isha", "20:20:00", "20:30:00")]
+            timetable(day)
+            rows, _, source = build_windows(cfg, friday, tz)
+            check("no Jumah row: Friday still has its prayer", True,
+                  ("Jumah", 13 * 3600 + 25 * 60, 14 * 3600 + 5 * 60) in rows)
+            check("no Jumah row: still the published timetable", "timetable", source)
+            check("no Jumah row: five windows", 5, len(rows))
+            timetable(day + [("Jumah", "14:00:00", "14:15:00")])
+            rows, _, _ = build_windows(cfg, friday, tz)
+            check("a Jumah row wins over Dhuhr", True,
+                  ("Jumah", 13 * 3600 + 50 * 60, 14 * 3600 + 35 * 60) in rows)
+            rows, _, _ = build_windows(cfg, date(2026, 10, 1), tz)
+            check("Thursday keeps Dhuhr", True, any(r[0] == "Dhuhr" for r in rows))
+    finally:
+        STATE_DIR = saved
 
     print("fallback file selection")
     with tempfile.TemporaryDirectory() as td:
