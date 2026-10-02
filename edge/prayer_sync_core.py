@@ -75,6 +75,7 @@ DEFAULTS = {
         "fallback_files": {},
         "resolve_timeout_seconds": 12,
         "require_live": False,
+        "end_grace_seconds": 60,
     },
     "schedule": {
         "prayers": ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"],

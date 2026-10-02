@@ -198,6 +198,8 @@ Mixlr channel API → Mixlr legacy API → configured fallback_urls
 
 Each candidate is probed for a real audio content-type before use, and re-resolved every couple of minutes during a window — because the mosque often starts broadcasting *after* the window opens.
 
+**The window closes when the broadcast does.** The window (adhan to iqamah) is only an upper limit. Once the live stream has played, its end means the mosque has finished: prayer-sync waits `stream.end_grace_seconds` for it to resume, then stops. It never switches to the local file after the live stream has played, and the local file, when it is used, plays once.
+
 **If nothing can be fetched, prayer times are computed locally** from latitude and longitude, using standard solar-position equations. Accuracy against Masjid-El-Noor's own published times:
 
 | | Fajr | Sunrise | Dhuhr | Asr | Maghrib | Isha |
@@ -206,7 +208,7 @@ Each candidate is probed for a real audio content-type before use, and re-resolv
 
 So a device with a dead network still calls the adhan at the right minute, indefinitely. Above ~48.5° latitude, where the sun may never reach the twilight angles, it falls back to the nearest-latitude (Aqrab al-Bilad) convention rather than producing nothing.
 
-**Other things it survives:** a Pi with no RTC booting at the wrong date (waits for NTP before scheduling); missing tzdata (fails loudly instead of silently shifting every prayer); a corrupt or truncated download (validated before it replaces a working file); a captive portal returning HTML (rejected, not parsed as config); two daemons racing (lock file); a stream that drops mid-adhan (reconnects for the rest of the window); an audio device that's busy (moves to the next one).
+**Other things it survives:** a Pi with no RTC booting at the wrong date (waits for NTP before scheduling); missing tzdata (fails loudly instead of silently shifting every prayer); a corrupt or truncated download (validated before it replaces a working file); a captive portal returning HTML (rejected, not parsed as config); two daemons racing (lock file); a stream that drops mid-adhan (reconnects within `end_grace_seconds`, 60 s by default; if it doesn't come back, the broadcast has ended and the prayer stops there instead of filling the window); an audio device that's busy (moves to the next one).
 
 It **never rewrites the crontab**. v1 wiped and rebuilt it nightly, so a single network blip at 02:30 meant silence for the whole day.
 
