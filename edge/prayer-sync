@@ -375,6 +375,43 @@ unmute_everything() {
 }
 
 # Older Raspberry Pi kernels route analog vs HDMI through a numid switch.
+# PipeWire keeps a volume per output (a Bluetooth speaker is often left at 40 %
+# by WirePlumber), and it applies on top of mpv's --volume. Set every sink to
+# audio.volume right before each play, after Bluetooth has connected, so a
+# speaker that reconnected since the last prayer is covered too.
+_vol_float() { printf '%d.%02d' $(($1 / 100)) $(($1 % 100)); }        # 85 -> 0.85
+_vol_pct()   { _dec "$(printf '%s' "$1" | sed -n 's/^\([0-9]*\)\.\([0-9][0-9]\).*/\1\2/p')"; }  # 0.40 -> 40
+
+_pw_sinks() { # prints "id<TAB>description" for every PipeWire audio sink
+    have pw-dump || return 1
+    find_core
+    pw-dump 2>/dev/null | "$PYTHON" -c '
+import json, sys
+try:
+    objs = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+for o in objs:
+    p = (o.get("info") or {}).get("props") or {}
+    if p.get("media.class") == "Audio/Sink":
+        print("%s\t%s" % (o.get("id"), p.get("node.description") or p.get("node.name") or "?"))
+'
+}
+
+set_sink_volumes() {
+    have wpctl || return 0
+    _sv=$(cfg_int 'audio.volume' 100)
+    [ "$_sv" -gt 100 ] && _sv=100
+    [ "$_sv" -lt 0 ] && _sv=0
+    _sf=$(_vol_float "$_sv")
+    _pw_sinks | while IFS="$TAB" read -r _sid _sname; do
+        [ -n "$_sid" ] || continue
+        wpctl set-mute "$_sid" 0 >/dev/null 2>&1
+        wpctl set-volume "$_sid" "$_sf" >/dev/null 2>&1
+    done
+    return 0
+}
+
 pi_force_analog() { have amixer && amixer cset numid=3 1 >/dev/null 2>&1; return 0; }
 
 _devices_of_class() { # _devices_of_class FILE CLASS [invert]
@@ -450,6 +487,7 @@ play_attempt() { # play_attempt DEVICE URL MAX_SECONDS
         _filter="loudnorm"
     fi
     detect_player || { log_error "no media player installed (mpv, ffplay, mpg123 or cvlc)"; return 1; }
+    set_sink_volumes
 
     case "$PLAYER_BIN" in
         mpv)
@@ -981,6 +1019,20 @@ cmd_doctor() {
             _warn "no paired bluetooth speaker (fine if you use the 3.5 mm jack)"
         fi
     fi
+    if have wpctl && _sinks=$(_pw_sinks) && [ -n "$_sinks" ]; then
+        _want=$(cfg_int 'audio.volume' 100); [ "$_want" -gt 100 ] && _want=100
+        printf '%s\n' "$_sinks" | while IFS="$TAB" read -r _sid _sname; do
+            _g=$(wpctl get-volume "$_sid" 2>/dev/null)
+            _raw=$(printf '%s' "$_g" | sed -n 's/^Volume: \([0-9.]*\).*/\1/p')
+            _p=""; [ -n "$_raw" ] && _p=$(_vol_pct "$_raw")
+            _m=""; case "$_g" in *MUTED*) _m=", muted" ;; esac
+            if [ -n "$_p" ] && [ "$_p" -ge "$_want" ] && [ -z "$_m" ]; then
+                _ok "volume $_sname: ${_p}%"
+            else
+                _warn "volume $_sname: ${_p:-?}%$_m (prayer-sync sets ${_want}% before playing)"
+            fi
+        done
+    fi
     have amixer && { amixer 2>/dev/null | grep -q '\[off\]' && _warn "an ALSA control is muted — prayer-sync unmutes before playing" || _ok "ALSA controls unmuted"; }
 
     echo
@@ -1033,6 +1085,7 @@ cmd_selftest() {
     for _fn in have run_limited core config_load cfg cfg_array cfg_int cfg_bool \
                resolve_stream stream_is_playable remember_good_stream \
                audio_devices ordered_devices classify_device unmute_everything \
+               set_sink_volumes _pw_sinks _vol_float _vol_pct \
                bt_ensure_connected detect_player play_attempt stop_playback run_window \
                _sleep_bounded _nth_line _due_window _load_windows \
                now_sec today_ymd sec_to_hm hms_to_sec _dec \
@@ -1064,6 +1117,14 @@ cmd_selftest() {
     _t "reject 24:00"   ""      "$(hms_to_sec 24:00 2>/dev/null)"
     _t "reject junk"    ""      "$(hms_to_sec nope 2>/dev/null)"
     _n=$(now_sec); _t "now_sec in range" "1" "$( [ "$_n" -ge 0 ] && [ "$_n" -lt 86400 ] && echo 1 || echo 0)"
+
+    echo "volume conversion"
+    _t "100 -> 1.00"  "1.00" "$(_vol_float 100)"
+    _t "85 -> 0.85"   "0.85" "$(_vol_float 85)"
+    _t "5 -> 0.05"    "0.05" "$(_vol_float 5)"
+    _t "0.40 -> 40"   "40"   "$(_vol_pct 0.40)"
+    _t "1.00 -> 100"  "100"  "$(_vol_pct 1.00)"
+    _t "0.08 -> 8"    "8"    "$(_vol_pct 0.08)"
 
     echo "audio classification"
     _t "bluez -> bluetooth" "bluetooth" "$(classify_device 'pulse/bluez_output.41_42_8C.1' 'JBL Flip 5')"

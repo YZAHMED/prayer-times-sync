@@ -160,6 +160,7 @@ Outputs are discovered at play time and tried in order until one genuinely produ
 - `auto` walks `priority`. Bluetooth is only offered if the speaker actually connects (with `rfkill unblock` and a reconnect attempt first), so a speaker that's off or out of range falls through to the 3.5 mm jack instead of playing into a dead sink.
 - `"output": "aux"` forces the headphone jack, and on older Raspberry Pi kernels also flips the analog/HDMI routing switch. It still falls back to other outputs unless you set `"strict_output": true`.
 - ALSA controls are **unmuted before every prayer** — a muted mixer is the most common cause of "everything looks right but there's no sound".
+- `volume` is applied to the **output itself** right before every play, not only to the player: every PipeWire sink is unmuted and set to `volume` (WirePlumber often leaves a Bluetooth speaker at 40 %, which mpv's own volume can't undo). `prayer-sync doctor` shows each output's volume.
 - `"extra_args"` passes flags straight to mpv for unusual hardware, e.g. `"--ao=alsa --audio-channels=stereo"`.
 
 ```bash
