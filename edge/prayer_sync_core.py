@@ -128,6 +128,18 @@ def synced_dir() -> str:
     return os.path.join(STATE_DIR, "synced")
 
 
+def _give_to_state_owner(path: str) -> None:
+    """A refresh run as root (the installer, sudo) must not leave files in
+    STATE_DIR that the service account can no longer replace."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return
+    try:
+        st = os.stat(STATE_DIR)
+        os.chown(path, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+
+
 def fleet_json(rel: str):
     """A fleet-wide file: the copy refresh downloaded wins over the one the
     installer put in CONF_DIR (both come from the repository)."""
@@ -144,7 +156,7 @@ def load_config() -> dict:
     mosque = local.get("mosque") or main.get("mosque") or DEFAULTS["mosque"]
     preset = fleet_json(os.path.join("mosques", f"{mosque}.json"))
     if preset is None:
-        warn(f"[WARN] no preset for mosque '{mosque}' in {CONF_DIR}/mosques")
+        warn(f"[WARN] no preset for mosque '{mosque}' in {CONF_DIR}/mosques or {synced_dir()}/mosques")
         preset = {}
 
     for layer in (preset, main, local):
@@ -687,6 +699,9 @@ def cmd_refresh(cfg: dict) -> int:
             try:
                 os.makedirs(os.path.dirname(local), exist_ok=True)
                 atomic_write(local, json.dumps(got, indent=2) + "\n")
+                d = synced_dir()
+                for path in (d, os.path.dirname(local), local):
+                    _give_to_state_owner(path)
             except OSError as exc:
                 warn(f"[WARN] could not save {remote}: {exc}")
 
@@ -1061,24 +1076,26 @@ def run_selftest() -> int:
     import tempfile
     global CONF_DIR, STATE_DIR
     saved = (CONF_DIR, STATE_DIR)
-    with tempfile.TemporaryDirectory() as td:
-        CONF_DIR, STATE_DIR = os.path.join(td, "etc"), os.path.join(td, "state")
-        os.makedirs(os.path.join(CONF_DIR, "mosques"))
-        os.makedirs(os.path.join(synced_dir(), "mosques"))
-        def put(path, obj):
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(obj, fh)
-        put(os.path.join(CONF_DIR, "config.json"), {"mosque": "m1", "city": "installed"})
-        put(os.path.join(CONF_DIR, "mosques", "m1.json"), {"name": "installed preset"})
-        check("installed config used without a download", "installed", load_config().get("city"))
-        put(os.path.join(synced_dir(), "config.json"), {"mosque": "m1", "city": "downloaded"})
-        put(os.path.join(synced_dir(), "mosques", "m1.json"), {"name": "downloaded preset"})
-        cfg = load_config()
-        check("downloaded config wins", "downloaded", cfg.get("city"))
-        check("downloaded preset wins", "downloaded preset", cfg.get("name"))
-        put(os.path.join(CONF_DIR, "config.local.json"), {"city": "local"})
-        check("config.local.json still wins over both", "local", load_config().get("city"))
-    CONF_DIR, STATE_DIR = saved
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            CONF_DIR, STATE_DIR = os.path.join(td, "etc"), os.path.join(td, "state")
+            os.makedirs(os.path.join(CONF_DIR, "mosques"))
+            os.makedirs(os.path.join(synced_dir(), "mosques"))
+            def put(path, obj):
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(obj, fh)
+            put(os.path.join(CONF_DIR, "config.json"), {"mosque": "m1", "city": "installed"})
+            put(os.path.join(CONF_DIR, "mosques", "m1.json"), {"name": "installed preset"})
+            check("installed config used without a download", "installed", load_config().get("city"))
+            put(os.path.join(synced_dir(), "config.json"), {"mosque": "m1", "city": "downloaded"})
+            put(os.path.join(synced_dir(), "mosques", "m1.json"), {"name": "downloaded preset"})
+            cfg = load_config()
+            check("downloaded config wins", "downloaded", cfg.get("city"))
+            check("downloaded preset wins", "downloaded preset", cfg.get("name"))
+            put(os.path.join(CONF_DIR, "config.local.json"), {"city": "local"})
+            check("config.local.json still wins over both", "local", load_config().get("city"))
+    finally:
+        CONF_DIR, STATE_DIR = saved
 
     print("fallback file selection")
     with tempfile.TemporaryDirectory() as td:

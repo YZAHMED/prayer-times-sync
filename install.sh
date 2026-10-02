@@ -387,6 +387,8 @@ fi
 # --------------------------------------------------------------------------
 say "Fetching initial data"
 "$BIN_DIR/prayer-sync" refresh >/dev/null 2>&1 || warn "initial refresh failed (offline computation will cover it)"
+# That refresh ran as root: hand anything it created back to the service.
+chown -R "$AUDIO_USER" "$STATE_DIR" 2>/dev/null || true
 
 echo
 "$BIN_DIR/prayer-sync" doctor || true
