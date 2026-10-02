@@ -77,6 +77,8 @@ Three layers, each overriding the one above:
 
 Edit `config.json` here, commit, and every device picks it up at its next refresh. (The device keeps the downloaded copies in `/var/lib/prayer-sync/synced/`, which the service account owns, so a service that runs as the audio user never needs to write to `/etc`.) Put anything device-specific (which speaker, which volume) in `config.local.json` so a refresh can't overwrite it.
 
+The daemon refreshes at `refresh_at`. If that still brings yesterday's timetable (the scheduled Action often runs hours late), it keeps it and checks again every hour until today's is published; a failed refresh retries every 30 minutes, and retries never carry past midnight.
+
 ### When the stream opens and closes
 
 `offsets` decides, per prayer, how long before the adhan the stream opens and how long after the iqamah it closes:
@@ -102,8 +104,6 @@ Edit `config.json` here, commit, and every device picks it up at its next refres
   "max_window_minutes": 90
 }
 ```
-
-The daemon refreshes at `refresh_at`. If that still brings yesterday's timetable (the scheduled Action often runs hours late), it keeps it and checks again every hour until today's is published; a failed refresh retries every 30 minutes, and retries never carry past midnight.
 
 `max_window_minutes` is a safety cap: if the feed ever returns nonsense, the stream still can't run all day. A window that would end after midnight is carried into the next day rather than being cut off at 23:59.
 
