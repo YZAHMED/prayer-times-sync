@@ -280,6 +280,9 @@ if [ -n "$OUTPUT" ] || [ -n "$VOLUME" ] || [ -n "$BT_MAC" ] || [ -n "$MOSQUE" ];
     ok "wrote $tmp"
 fi
 
+# Copies refresh downloaded earlier would shadow the files just installed until
+# the next refresh; the service's first refresh fetches them again.
+rm -rf "$STATE_DIR/synced"
 touch "$LOG_FILE" 2>/dev/null || true
 chown -R "$AUDIO_USER" "$STATE_DIR" /var/run/prayer-sync 2>/dev/null || true
 chown "$AUDIO_USER" "$LOG_FILE" 2>/dev/null || true

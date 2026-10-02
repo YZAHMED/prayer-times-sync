@@ -121,14 +121,28 @@ def deep_merge(base: dict, overlay: dict) -> dict:
     return out
 
 
+def synced_dir() -> str:
+    """Where refresh keeps the fleet-wide files it downloads (config.json,
+    mosques/<id>.json). The service may run as the audio user, which owns
+    STATE_DIR but not CONF_DIR, so downloads never go to /etc."""
+    return os.path.join(STATE_DIR, "synced")
+
+
+def fleet_json(rel: str):
+    """A fleet-wide file: the copy refresh downloaded wins over the one the
+    installer put in CONF_DIR (both come from the repository)."""
+    got = read_json(os.path.join(synced_dir(), rel))
+    return got if got is not None else read_json(os.path.join(CONF_DIR, rel))
+
+
 def load_config() -> dict:
     cfg = json.loads(json.dumps(DEFAULTS))
 
-    main = read_json(os.path.join(CONF_DIR, "config.json")) or {}
+    main = fleet_json("config.json") or {}
     local = read_json(os.path.join(CONF_DIR, "config.local.json")) or {}
 
     mosque = local.get("mosque") or main.get("mosque") or DEFAULTS["mosque"]
-    preset = read_json(os.path.join(CONF_DIR, "mosques", f"{mosque}.json"))
+    preset = fleet_json(os.path.join("mosques", f"{mosque}.json"))
     if preset is None:
         warn(f"[WARN] no preset for mosque '{mosque}' in {CONF_DIR}/mosques")
         preset = {}
@@ -664,14 +678,17 @@ def cmd_refresh(cfg: dict) -> int:
     else:
         warn("[WARN] could not refresh the timetable — keeping the cached copy")
 
-    for remote, local in (
-        ("config.json", os.path.join(CONF_DIR, "config.json")),
-        (f"mosques/{cfg_get(cfg, 'mosque', '')}.json",
-         os.path.join(CONF_DIR, "mosques", f"{cfg_get(cfg, 'mosque', '')}.json")),
-    ):
+    # Best effort: the timetable decides success; a fleet file that can't be
+    # saved is reported, never fatal.
+    for remote in ("config.json", f"mosques/{cfg_get(cfg, 'mosque', '')}.json"):
         got = http_get(f"{base}/{remote}", timeout, 2)
         if isinstance(got, dict):
-            atomic_write(local, json.dumps(got, indent=2) + "\n")
+            local = os.path.join(synced_dir(), *remote.split("/"))
+            try:
+                os.makedirs(os.path.dirname(local), exist_ok=True)
+                atomic_write(local, json.dumps(got, indent=2) + "\n")
+            except OSError as exc:
+                warn(f"[WARN] could not save {remote}: {exc}")
 
     # stream_url.txt is resolved for the default mosque only: never let another
     # mosque fall back to it.
@@ -684,7 +701,10 @@ def cmd_refresh(cfg: dict) -> int:
     if isinstance(text, str):
         first = text.strip().splitlines()[0].strip() if text.strip() else ""
         if first.startswith("http"):
-            atomic_write(os.path.join(STATE_DIR, "stream_url.txt"), first + "\n")
+            try:
+                atomic_write(os.path.join(STATE_DIR, "stream_url.txt"), first + "\n")
+            except OSError as exc:
+                warn(f"[WARN] could not save stream_url.txt: {exc}")
 
     return 0 if ok else 1
 
@@ -1037,8 +1057,30 @@ def run_selftest() -> int:
     check("missing timetable is not fatal", None, timetable_date(None))
     check("html is not a timetable", None, timetable_date("<html>404</html>"))
 
-    print("fallback file selection")
+    print("downloaded fleet files")
     import tempfile
+    global CONF_DIR, STATE_DIR
+    saved = (CONF_DIR, STATE_DIR)
+    with tempfile.TemporaryDirectory() as td:
+        CONF_DIR, STATE_DIR = os.path.join(td, "etc"), os.path.join(td, "state")
+        os.makedirs(os.path.join(CONF_DIR, "mosques"))
+        os.makedirs(os.path.join(synced_dir(), "mosques"))
+        def put(path, obj):
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(obj, fh)
+        put(os.path.join(CONF_DIR, "config.json"), {"mosque": "m1", "city": "installed"})
+        put(os.path.join(CONF_DIR, "mosques", "m1.json"), {"name": "installed preset"})
+        check("installed config used without a download", "installed", load_config().get("city"))
+        put(os.path.join(synced_dir(), "config.json"), {"mosque": "m1", "city": "downloaded"})
+        put(os.path.join(synced_dir(), "mosques", "m1.json"), {"name": "downloaded preset"})
+        cfg = load_config()
+        check("downloaded config wins", "downloaded", cfg.get("city"))
+        check("downloaded preset wins", "downloaded preset", cfg.get("name"))
+        put(os.path.join(CONF_DIR, "config.local.json"), {"city": "local"})
+        check("config.local.json still wins over both", "local", load_config().get("city"))
+    CONF_DIR, STATE_DIR = saved
+
+    print("fallback file selection")
     with tempfile.TemporaryDirectory() as td:
         generic = os.path.join(td, "adhan.mp3")
         fajr    = os.path.join(td, "adhan-fajr.mp3")
