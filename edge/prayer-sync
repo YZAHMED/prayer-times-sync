@@ -786,12 +786,23 @@ cmd_run() {
 
         if [ "$_today" != "$_day" ]; then
             [ -n "$_day" ] && log_info "date rolled over to $_today"
-            _day="$_today"; _recompute=1
+            # _next_try is a time of day: one set before midnight (e.g. 23:59
+            # + 30 min) would otherwise block every refresh until a restart.
+            _day="$_today"; _recompute=1; _next_try=0
         fi
 
         if [ "$_refresh_day" != "$_today" ] && [ "$_now" -ge "$_refresh_at" ] && [ "$_now" -ge "$_next_try" ]; then
             if core refresh; then
-                _refresh_day="$_today"; config_load
+                config_load
+                # The publisher often runs hours late, so 02:30 may still bring
+                # yesterday's timetable: keep it and look again every hour
+                # until today's is out.
+                if [ "$(core status 2>/dev/null | sed -n "s/^timetable_date${TAB}//p")" = "$_today" ]; then
+                    _refresh_day="$_today"
+                else
+                    _next_try=$((_now + 3600))
+                    log_info "today's timetable is not published yet; checking again in 60 minutes"
+                fi
             else
                 # Do not give up for the day because the network blinked.
                 _next_try=$((_now + 1800))

@@ -103,6 +103,8 @@ Edit `config.json` here, commit, and every device picks it up at its next refres
 }
 ```
 
+The daemon refreshes at `refresh_at`. If that still brings yesterday's timetable (the scheduled Action often runs hours late), it keeps it and checks again every hour until today's is published; a failed refresh retries every 30 minutes, and retries never carry past midnight.
+
 `max_window_minutes` is a safety cap: if the feed ever returns nonsense, the stream still can't run all day. A window that would end after midnight is carried into the next day rather than being cut off at 23:59.
 
 To silence everything overnight regardless of schedule:
