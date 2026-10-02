@@ -34,6 +34,7 @@ CONFIG_LOCAL="$PS_CONF_DIR/config.local.json"
 MOSQUE_DIR="$PS_CONF_DIR/mosques"
 LAST_GOOD_STREAM="$PS_STATE_DIR/last_good_stream.txt"
 SINK_CACHE="$PS_STATE_DIR/last_good_sink.txt"
+DONE_WINDOW="$PS_STATE_DIR/completed_window"
 MERGED_CFG="$PS_STATE_DIR/config.merged"
 WINDOWS_FILE="$PS_STATE_DIR/windows.today"
 LOCK_FILE="$PS_RUN_DIR/prayer-sync.lock"
@@ -527,16 +528,33 @@ run_window() { # run_window NAME WINDOW_START WINDOW_END
     fi
 
     _ui=1; _di=1; _played_total=0; _attempts=0; _last_resolve=$(now_sec); _minok=8
+    # Once the live stream has played, its end is the end of the broadcast:
+    # keep trying to resume it for a short grace (a dropped connection), never
+    # fall back to the local file, and close the window when the grace runs out.
+    _grace=$(cfg_int 'stream.end_grace_seconds' 60)
+    _live_ok=0; _ended_at=0
 
     while : ; do
         [ "${STOPPING:-0}" = "1" ] && break
         _now=$(now_sec)
         _remaining=$((_wend - _now))
         [ "$_remaining" -le 2 ] && break
+        if [ "$_ended_at" -gt 0 ] && [ $((_now - _ended_at)) -ge "$_grace" ]; then
+            log_info "$_name: broadcast ended — closing the window early"
+            break
+        fi
+        # Waits never run past the window, nor past the resume grace.
+        _until=$_wend; _backoff=10
+        if [ "$_ended_at" -gt 0 ]; then
+            _backoff=3
+            [ $((_ended_at + _grace)) -lt "$_until" ] && _until=$((_ended_at + _grace))
+        fi
 
         # Re-resolve periodically: the broadcast may only have just started.
-        # Retry sooner while there is nothing at all to play.
+        # Retry sooner while there is nothing at all to play, or while waiting
+        # for an ended broadcast to resume (Mixlr gives a restart a new URL).
         _requiz=120; [ "${_nurl:-0}" -eq 0 ] && _requiz=20
+        [ "$_ended_at" -gt 0 ] && _requiz=15
         if [ $((_now - _last_resolve)) -ge "$_requiz" ]; then
             if resolve_stream "$_name" > "$_urllist.new" 2>/dev/null && [ -s "$_urllist.new" ]; then
                 mv -f "$_urllist.new" "$_urllist"
@@ -547,7 +565,7 @@ run_window() { # run_window NAME WINDOW_START WINDOW_END
         fi
 
         if [ "${_nurl:-0}" -eq 0 ]; then
-            _sleep_bounded 10 "$_wend"
+            _sleep_bounded "$_backoff" "$_until"
             continue
         fi
 
@@ -556,11 +574,18 @@ run_window() { # run_window NAME WINDOW_START WINDOW_END
         [ -n "$_url" ] || { _ui=1; continue; }
         [ -n "$_dev" ] || { _di=1; continue; }
 
+        _local=0; case "$_url" in /*) _local=1 ;; esac
+        if [ "$_live_ok" = "1" ] && [ "$_local" = "1" ]; then
+            _ui=$((_ui + 1)); [ "$_ui" -gt "$_nurl" ] && _ui=1
+            _sleep_bounded 2 "$_until"
+            continue
+        fi
+
         _attempts=$((_attempts + 1))
         if ! stream_is_playable "$_url"; then
             log_debug "$_name: candidate $_ui not playable, advancing"
             _ui=$((_ui + 1)); [ "$_ui" -gt "$_nurl" ] && _ui=1
-            [ "$_attempts" -ge "$_nurl" ] && _sleep_bounded 10 "$_wend"
+            [ "$_attempts" -ge "$_nurl" ] && _sleep_bounded "$_backoff" "$_until"
             continue
         fi
 
@@ -572,20 +597,28 @@ run_window() { # run_window NAME WINDOW_START WINDOW_END
         _played_total=$((_played_total + _ran))
 
         if [ "$_ran" -ge "$_minok" ]; then
-            remember_good_stream "$_url"
+            # Only a live URL is a "good stream": a remembered local file would
+            # be offered before the per-prayer fallback (Fajr's adhan at Isha).
+            [ "$_local" = "1" ] || remember_good_stream "$_url"
             printf '%s\n' "$_dev" > "$SINK_CACHE" 2>/dev/null || true
             [ $((_wend - _t1)) -le 2 ] && break
-            log_warn "$_name: playback ended after ${_ran}s with time left — reconnecting"
-            _sleep_bounded 2 "$_wend"
+            if [ "$_local" = "1" ]; then
+                # The local adhan is a recording: once is the adhan, more is a loop.
+                log_info "$_name: local adhan played once (${_ran}s) — closing the window"
+                break
+            fi
+            _live_ok=1; _ended_at=$_t1
+            log_info "$_name: live stream ended after ${_ran}s — waiting up to ${_grace}s for it to resume"
+            _sleep_bounded 2 "$_until"
         else
             log_warn "$_name: output '$_dev' failed after ${_ran}s — trying next output"
             _di=$((_di + 1))
             if [ "$_di" -gt "$_ndev" ]; then
                 _di=1
                 _ui=$((_ui + 1)); [ "$_ui" -gt "$_nurl" ] && _ui=1
-                _sleep_bounded 10 "$_wend"
+                _sleep_bounded "$_backoff" "$_until"
             else
-                _sleep_bounded 2 "$_wend"
+                _sleep_bounded 2 "$_until"
             fi
         fi
     done
@@ -663,6 +696,14 @@ _load_windows() {
     return 1
 }
 
+# A window that finished early (broadcast ended, local adhan played once) is
+# still "due" until its end time; remembering it stops the daemon or cron from
+# starting it again. Only successful windows are recorded, so one where nothing
+# played keeps retrying.
+_window_key()  { printf '%s\t%s\t%s' "$(today_ymd)" "$1" "$2"; }
+_window_done() { [ -f "$DONE_WINDOW" ] && [ "$(cat "$DONE_WINDOW" 2>/dev/null)" = "$(_window_key "$1" "$2")" ]; }
+_mark_window_done() { _window_key "$1" "$2" > "$DONE_WINDOW" 2>/dev/null || true; }
+
 _due_window() { # prints "NAME<TAB>start<TAB>end" for the window containing now
     _n=$(now_sec)
     while IFS="$TAB" read -r _wn _ws _we; do
@@ -729,7 +770,10 @@ cmd_run() {
                 _rest=${_due#*"$TAB"}
                 _s=${_rest%%"$TAB"*}
                 _e=${_rest#*"$TAB"}
-                run_window "$_n" "$_s" "$_e" || true
+                if _window_done "$_n" "$_s"; then
+                    sleep "$_tick"; continue
+                fi
+                run_window "$_n" "$_s" "$_e" && _mark_window_done "$_n" "$_s"
                 # Never re-enter instantly: a window that fails fast would
                 # otherwise spin the CPU until it closes.
                 [ "$(now_sec)" -lt "$_e" ] && sleep "$_tick"
@@ -750,8 +794,11 @@ cmd_once() {
     _load_windows || return 1
     in_quiet_hours && { log_info "inside quiet hours; skipping"; return 0; }
     if _due=$(_due_window); then
-        _n=${_due%%"$TAB"*}; _rest=${_due#*"$TAB"}
-        run_window "$_n" "${_rest%%"$TAB"*}" "${_rest#*"$TAB"}"
+        _n=${_due%%"$TAB"*}; _rest=${_due#*"$TAB"}; _s=${_rest%%"$TAB"*}
+        if _window_done "$_n" "$_s"; then
+            log_info "$_n already played; nothing to do"; return 0
+        fi
+        run_window "$_n" "$_s" "${_rest#*"$TAB"}" && _mark_window_done "$_n" "$_s"
     else
         log_info "nothing scheduled right now"
     fi
