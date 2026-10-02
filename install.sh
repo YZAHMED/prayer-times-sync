@@ -165,7 +165,8 @@ BASE="curl python3 mpv ca-certificates tzdata"
 case "$PKG" in
     apt-get)
         BASE="$BASE alsa-utils"
-        [ -n "$BT_MAC" ] && BASE="$BASE bluez pipewire-pulse"
+        # pipewire-bin (pw-dump) and wireplumber (wpctl): setting the speaker volume.
+        [ -n "$BT_MAC" ] && BASE="$BASE bluez pipewire-pulse pipewire-bin wireplumber"
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq || warn "apt-get update failed; continuing with what is cached"
         # Install individually so one unavailable package cannot block the rest.
