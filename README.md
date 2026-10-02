@@ -103,6 +103,8 @@ Edit `config.json` here, commit, and every device picks it up at its next refres
 }
 ```
 
+On `jumah_weekday`, Dhuhr is broadcast as Jumah with the `Jumah` offsets. If the mosque's timetable has no Jumah row (Masjid El-Noor's hasn't since August 2026), Dhuhr's times are used, so Friday's prayer is never dropped.
+
 `max_window_minutes` is a safety cap: if the feed ever returns nonsense, the stream still can't run all day. A window that would end after midnight is carried into the next day rather than being cut off at 23:59.
 
 To silence everything overnight regardless of schedule:
