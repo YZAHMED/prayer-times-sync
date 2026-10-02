@@ -1025,9 +1025,12 @@ cmd_doctor() {
     echo
     echo "Configuration"
     [ -f "$CONFIG_MAIN" ] && _ok "$CONFIG_MAIN present" || _warn "$CONFIG_MAIN missing (defaults in use)"
+    [ -f "$PS_STATE_DIR/synced/config.json" ] && _ok "downloaded config.json in use ($PS_STATE_DIR/synced)"
     [ -f "$CONFIG_LOCAL" ] && _ok "$CONFIG_LOCAL present (device override)" || :
     _m=$(cfg 'mosque' '?')
-    [ -f "$MOSQUE_DIR/$_m.json" ] && _ok "mosque preset '$_m'" || _warn "no preset for '$_m' in $MOSQUE_DIR"
+    if [ -f "$PS_STATE_DIR/synced/mosques/$_m.json" ]; then _ok "mosque preset '$_m' (downloaded copy)"
+    elif [ -f "$MOSQUE_DIR/$_m.json" ]; then _ok "mosque preset '$_m'"
+    else _warn "no preset for '$_m' in $MOSQUE_DIR or $PS_STATE_DIR/synced/mosques"; fi
     _lat=$(cfg 'location.latitude' 0)
     case "$_lat" in 0|0.0|"") _warn "no coordinates set — the offline fallback cannot compute times" ;;
         *) _ok "location $_lat,$(cfg 'location.longitude' 0)  method=$(cfg 'calculation.method' ISNA)/$(cfg 'calculation.asr' standard)" ;;

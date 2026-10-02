@@ -280,6 +280,9 @@ if [ -n "$OUTPUT" ] || [ -n "$VOLUME" ] || [ -n "$BT_MAC" ] || [ -n "$MOSQUE" ];
     ok "wrote $tmp"
 fi
 
+# Copies refresh downloaded earlier would shadow the files just installed until
+# the next refresh; the service's first refresh fetches them again.
+rm -rf "$STATE_DIR/synced"
 touch "$LOG_FILE" 2>/dev/null || true
 chown -R "$AUDIO_USER" "$STATE_DIR" /var/run/prayer-sync 2>/dev/null || true
 chown "$AUDIO_USER" "$LOG_FILE" 2>/dev/null || true
@@ -384,6 +387,8 @@ fi
 # --------------------------------------------------------------------------
 say "Fetching initial data"
 "$BIN_DIR/prayer-sync" refresh >/dev/null 2>&1 || warn "initial refresh failed (offline computation will cover it)"
+# That refresh ran as root: hand anything it created back to the service.
+chown -R "$AUDIO_USER" "$STATE_DIR" 2>/dev/null || true
 
 echo
 "$BIN_DIR/prayer-sync" doctor || true
