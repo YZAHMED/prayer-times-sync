@@ -255,7 +255,7 @@ tools/update_prayers.py     CI: fetch and validate the timetable
 tools/resolve_stream.py     CI: refresh the fallback stream URL (shares the device's resolver)
 prayers.json                published timetable (written by CI)
 stream_url.txt              published fallback URL (written by CI)
-status.json                 last-update heartbeat
+status.json                 time of the last data change
 ```
 
 ### Secrets
