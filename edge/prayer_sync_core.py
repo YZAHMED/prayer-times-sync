@@ -425,6 +425,28 @@ def timetable_date(doc) -> str | None:
     return str(raw)[:10] if raw else None
 
 
+def timetable_for(doc, day: str):
+    """The timetable for `day` (YYYY-MM-DD): the published day itself, or one
+    of the days the publisher sent ahead in doc["upcoming"]. None if neither."""
+    if not isinstance(doc, dict):
+        return None
+    if timetable_date(doc) == day:
+        return doc
+    ahead = doc.get("upcoming")
+    entry = ahead.get(day) if isinstance(ahead, dict) else None
+    if (isinstance(entry, dict) and str(entry.get("prayerDate") or "")[:10] == day
+            and isinstance(entry.get("singlePrayers"), list) and entry["singlePrayers"]):
+        return {"data": {"prayerOfDay": entry}}
+    return None
+
+
+def days_ahead(doc, day: str) -> int:
+    """How many days after `day` the cached timetable still covers."""
+    ahead = doc.get("upcoming") if isinstance(doc, dict) else None
+    dates = [d for d in (ahead or {}) if isinstance(ahead, dict) and d > day and timetable_for(doc, d)]
+    return len(dates)
+
+
 def single_prayers(doc) -> list:
     try:
         items = doc["data"]["prayerOfDay"]["singlePrayers"]
@@ -466,9 +488,10 @@ def offsets_for(cfg: dict, name: str):
 
 def build_windows(cfg: dict, when: date, tz: ZoneInfo):
     """Returns (rows, carry, source). Each row is (name, start_sec, end_sec)."""
-    doc = read_json(prayers_path())
-    ttdate = timetable_date(doc) if doc else None
     today_str = when.isoformat()
+    doc = read_json(prayers_path())
+    doc = timetable_for(doc, today_str) or doc     # a day sent ahead counts as today's
+    ttdate = timetable_date(doc) if doc else None
     source = "timetable"
 
     use_offline = False
@@ -490,6 +513,11 @@ def build_windows(cfg: dict, when: date, tz: ZoneInfo):
         by_name = {e.get("prayerName"): e for e in single_prayers(doc) if isinstance(e, dict)}
         start_key = cfg_get(cfg, "schedule.start_anchor", "prayerAdhan")
         stop_key = cfg_get(cfg, "schedule.stop_anchor", "prayerIqamah")
+        # Maghrib is sunset. A timetable far from it is wrong (Masjid El-Noor's
+        # published days after the clocks change were an hour late), so check.
+        sunset = None
+        if cfg_get(cfg, "location.latitude", 0) or cfg_get(cfg, "location.longitude", 0):
+            sunset = computed_times(cfg, when, tz).get("Maghrib")
         for name in todays_prayers(cfg, when):
             entry = by_name.get(name)
             if not entry and name == "Jumah":
@@ -507,6 +535,12 @@ def build_windows(cfg: dict, when: date, tz: ZoneInfo):
             stop = anchor_value(entry, [stop_key, "prayerAdhan", "prayerBegins"])
             if stop is None or stop < start:
                 stop = start + gap * 60
+            if name == "Maghrib" and sunset is not None:
+                calc = int(round((sunset % 24) * 3600))
+                if abs(start - calc) > 20 * 60:
+                    warn(f"[WARN] Maghrib {sec_to_hms(start)[:5]} in the timetable is far from "
+                         f"sunset ({sec_to_hms(calc)[:5]}) — using the computed time")
+                    start, stop = calc, calc + gap * 60
             pre, post = offsets_for(cfg, name)
             rows.append((name, start - pre * 60, stop + post * 60))
         if not rows:
@@ -779,7 +813,8 @@ def cmd_windows(cfg: dict) -> int:
 def cmd_status(cfg: dict) -> int:
     tz = tz_of(cfg)
     today = datetime.now(tz).date()
-    doc = read_json(prayers_path())
+    cached = read_json(prayers_path())
+    doc = timetable_for(cached, today.isoformat()) or cached
     ttdate = timetable_date(doc) if doc else None
     print(f"timezone\t{cfg_get(cfg, 'timezone', 'UTC')}")
     print(f"today\t{today.isoformat()}")
@@ -792,6 +827,7 @@ def cmd_status(cfg: dict) -> int:
             print("stale_days\t9999")
     else:
         print("stale_days\t9999")
+    print(f"days_ahead\t{days_ahead(cached, today.isoformat())}")
     _, _, source = build_windows(cfg, today, tz)
     print(f"source\t{source}")
     times = computed_times(cfg, today, tz)
@@ -1131,6 +1167,43 @@ def run_selftest() -> int:
                   ("Jumah", 13 * 3600 + 50 * 60, 14 * 3600 + 35 * 60) in rows)
             rows, _, _ = build_windows(cfg, date(2026, 10, 1), tz)
             check("Thursday keeps Dhuhr", True, any(r[0] == "Dhuhr" for r in rows))
+    finally:
+        STATE_DIR = saved
+
+    print("days sent ahead and the Maghrib check")
+    saved = STATE_DIR
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            STATE_DIR = td
+            def day(d, maghrib="18:58:00"):
+                return {"prayerDate": d + "T00:00:00", "singlePrayers": [
+                    {"prayerName": n, "prayerBegins": a, "prayerAdhan": a, "prayerIqamah": a}
+                    for n, a in (("Fajr", "06:05:00"), ("Dhuhr", "13:35:00"), ("Asr", "17:20:00"),
+                                 ("Maghrib", maghrib), ("Isha", "20:20:00"))]}
+            doc = {"data": {"prayerOfDay": day("2026-10-02")},
+                   "upcoming": {"2026-10-03": day("2026-10-03", "18:56:00"),
+                                "2026-10-04": day("2026-10-05"),           # wrong date inside
+                                "2026-11-02": day("2026-11-02", "18:08:00")}}
+            check("published day is found", "2026-10-02", timetable_date(timetable_for(doc, "2026-10-02")))
+            check("a day sent ahead is found", "2026-10-03", timetable_date(timetable_for(doc, "2026-10-03")))
+            check("a mislabelled day is not used", None, timetable_for(doc, "2026-10-04"))
+            check("an absent day is None", None, timetable_for(doc, "2026-10-06"))
+            check("days ahead counted (valid only)", 2, days_ahead(doc, "2026-10-02"))
+            with open(prayers_path(), "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+            cfg = json.loads(json.dumps(DEFAULTS))
+            cfg["location"] = {"latitude": 43.6893245, "longitude": -79.4718826}
+            cfg["offsets"] = {"default": {"pre": 0, "post": 10}}
+            tz = ZoneInfo("America/Toronto")
+            rows, _, source = build_windows(cfg, date(2026, 10, 3), tz)
+            check("a day sent ahead is used as the timetable", "timetable", source)
+            check("its Maghrib is kept (close to sunset)", 18 * 3600 + 56 * 60,
+                  next(r[1] for r in rows if r[0] == "Maghrib"))
+            rows, _, _ = build_windows(cfg, date(2026, 11, 2), tz)
+            m = next(r[1] for r in rows if r[0] == "Maghrib")
+            check("an hour-late Maghrib is replaced by sunset (~17:05 EST)", True, 16 * 3600 + 55 * 60 <= m <= 17 * 3600 + 15 * 60)
+            check("other prayers that day keep the timetable", 6 * 3600 + 5 * 60,
+                  next(r[1] for r in rows if r[0] == "Fajr"))
     finally:
         STATE_DIR = saved
 
