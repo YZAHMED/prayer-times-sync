@@ -114,7 +114,9 @@ jobs:
 
             # shellcheck disable=SC2086
             git add $present
-            if git diff --staged --quiet; then
+            # status.json's timestamp changes on every run: commit only when a
+            # timetable or the stream URL changed (several runs a night).
+            if git diff --staged --quiet -- . ':(exclude)status.json'; then
               echo "nothing changed"
               exit 0
             fi
