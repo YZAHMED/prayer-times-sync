@@ -193,7 +193,7 @@ def masjid_url(base_url: str, masjid_id) -> str:
     return re.sub(r"(?i)(masjidid=)\d+", lambda m: f"{m.group(1)}{int(masjid_id)}", base_url)
 
 
-def fetch_masjidal(tz: str, preset: dict):
+def fetch_masjidal(tz: str, preset: dict, day: str | None = None):
     api_key = os.environ.get("PRAYER_API_KEY", "")
     base_url = os.environ.get("PRAYER_API_BASE_URL", "")
     if not api_key or not base_url:
@@ -201,7 +201,7 @@ def fetch_masjidal(tz: str, preset: dict):
     # The secret base URL names one masjid; any preset on the same platform
     # (ad-din / Masjidal portal) swaps in its own timetable.masjid_id.
     base_url_for = masjid_url(base_url, (preset.get("timetable") or {}).get("masjid_id"))
-    url = f"{base_url_for}&day={ymd_in(tz)}&time={hms_in(tz)}"
+    url = f"{base_url_for}&day={day or ymd_in(tz)}&time={hms_in(tz)}"
     secrets = [api_key, base_url, base_url_for]
     payload = get_json(url, {
         "accept": "*/*",
@@ -211,7 +211,7 @@ def fetch_masjidal(tz: str, preset: dict):
     return payload, secrets
 
 
-def fetch_aladhan(tz: str, preset: dict):
+def fetch_aladhan(tz: str, preset: dict, day: str | None = None):
     loc = preset.get("location", {}) or {}
     lat = loc.get("latitude")
     lng = loc.get("longitude")
@@ -222,7 +222,7 @@ def fetch_aladhan(tz: str, preset: dict):
                   "KARACHI": 1, "TEHRAN": 7, "JAFARI": 0}
     method = method_map.get(str(calc.get("method", "ISNA")).upper(), 2)
     school = 1 if str(calc.get("asr", "standard")).lower() == "hanafi" else 0
-    y, m, d = ymd_in(tz).split("-")
+    y, m, d = (day or ymd_in(tz)).split("-")
     url = (f"https://api.aladhan.com/v1/timings/{d}-{m}-{y}"
            f"?latitude={lat}&longitude={lng}&method={method}&school={school}")
     res = get_json(url, {"accept": "application/json"}, [])
@@ -271,7 +271,7 @@ def _valid_time(v) -> bool:
     return all(p.isdigit() for p in parts)
 
 
-def validate(payload: dict, tz: str):
+def validate(payload: dict, tz: str, expect: str | None = None):
     day = ((payload or {}).get("data") or {}).get("prayerOfDay")
     if not day:
         raise RuntimeError("payload has no data.prayerOfDay")
@@ -281,12 +281,12 @@ def validate(payload: dict, tz: str):
         raise RuntimeError("singlePrayers is empty")
 
     date_str = str(day.get("prayerDate") or "")[:10]
-    allowed = [ymd_in(tz, -1), ymd_in(tz), ymd_in(tz, 1)]
+    allowed = [expect] if expect else [ymd_in(tz, -1), ymd_in(tz), ymd_in(tz, 1)]
     if date_str not in allowed:
         raise RuntimeError(
             f"timetable is for {date_str or '(none)'}, expected one of {', '.join(allowed)}"
         )
-    if date_str != ymd_in(tz):
+    if date_str != ymd_in(tz) and not expect:
         print(f"  note: payload date {date_str} is not today ({ymd_in(tz)})", file=sys.stderr)
 
     by_name = {e.get("prayerName"): e for e in lst if isinstance(e, dict)}
@@ -307,6 +307,12 @@ def validate(payload: dict, tz: str):
 
 PROVIDERS = {"masjidal": fetch_masjidal, "aladhan": fetch_aladhan,
              "galaxystream": fetch_galaxystream}
+# Providers that return any requested date. For these, the days after today
+# are published too (payload["upcoming"]), so a device has today's timetable
+# from yesterday's run however late GitHub starts it, and a week of the
+# mosque's real times if it goes offline. GalaxyStream only shows today.
+DATED = {"masjidal", "aladhan"}
+DAYS = 7    # today + 6 (config.json data.publish_days overrides)
 
 
 def publish(mosque_id: str, config: dict, out: Path) -> str:
@@ -325,6 +331,21 @@ def publish(mosque_id: str, config: dict, out: Path) -> str:
     date_str, count = validate(payload, tz)
     print(f"  validated: {count} entries for {date_str}")
 
+    days = int(((config.get("data") or {}).get("publish_days")) or DAYS)
+    if provider in DATED and days > 1:
+        ahead = {}
+        for i in range(1, days):
+            want = ymd_in(tz, i)
+            try:
+                more, _ = fn(tz, preset, want)
+                validate(more, tz, expect=want)
+                ahead[want] = more["data"]["prayerOfDay"]
+            except Exception as exc:  # noqa: BLE001 - a missing future day only shortens the list
+                print(f"  {want}: skipped ({exc})", file=sys.stderr)
+        if ahead:
+            payload["upcoming"] = ahead
+        print(f"  ahead: {len(ahead)}/{days - 1} day(s)")
+
     nxt = json.dumps(payload, indent=2) + "\n"
     prev = out.read_text(encoding="utf-8") if out.exists() else ""
     if prev == nxt:
@@ -336,7 +357,7 @@ def publish(mosque_id: str, config: dict, out: Path) -> str:
     tmp = out.parent / f"{out.name}.tmp"
     tmp.write_text(nxt, encoding="utf-8")
     tmp.replace(out)
-    print(f"  wrote {out.relative_to(ROOT)} for {date_str}")
+    print(f"  wrote {out.relative_to(ROOT) if out.is_relative_to(ROOT) else out} for {date_str}")
     return date_str
 
 

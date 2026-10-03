@@ -1053,6 +1053,7 @@ cmd_doctor() {
         case "$_k" in
             timetable_date) [ "$_v" = none ] && _warn "no cached timetable yet" || _ok "cached timetable: $_v" ;;
             stale_days)     [ "${_v:-9999}" -le 1 ] 2>/dev/null && _ok "timetable is current" || _warn "timetable is $_v day(s) old" ;;
+            days_ahead)     [ "${_v:-0}" -gt 0 ] 2>/dev/null && _ok "timetable covers $_v more day(s)" || : ;;
             source)         _ok "schedule source: $_v" ;;
             offline_ok)     [ "$_v" = yes ] && _ok "offline computation works" || _bad "offline computation failed — no safety net" ;;
             offline_times)  _ok "computed: $_v" ;;

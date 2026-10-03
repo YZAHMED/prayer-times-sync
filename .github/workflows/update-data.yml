@@ -3,15 +3,14 @@ name: Update prayer data
 # Publishes only the mosque in use (the MOSQUE repository variable, or the
 # `mosque` input of a manual run); with neither set, every preset.
 #
-# GitHub starts scheduled runs hours late (02:00 Toronto runs at ~08:00), after
-# devices refresh at 02:30. So an always-on machine triggers this manually at
-# 01:00, 01:30 and 02:00 Toronto time (a manual run starts at once), and the
-# schedule below is only a backup. Every run is idempotent and commits only
-# when the timetable changed.
+# GitHub starts scheduled runs hours late (02:00 Toronto runs at ~08:00). That
+# is fine: each run also publishes the next days (prayers.json "upcoming"), so
+# devices already have today's timetable from yesterday's run. Every run is
+# idempotent and commits only when a timetable changed.
 on:
   schedule:
-    - cron: '0 6 * * *'   # backup: 06:00 UTC = 02:00 Toronto (EDT), runs late
-    - cron: '0 8 * * *'   # backup retry
+    - cron: '0 6 * * *'   # 06:00 UTC = 02:00 Toronto (EDT); GitHub runs it hours late
+    - cron: '0 8 * * *'   # retry
   workflow_dispatch:
     inputs:
       mosque:

@@ -66,4 +66,47 @@ check("example preset rejected", True, rejects("example-second-mosque"))
 check("path rejected", True, rejects("../config"))
 check("empty rejected", True, rejects(""))
 
+# Days ahead: a fake dated provider; a failed or mislabelled future day is skipped.
+import json, tempfile  # noqa: E402
+TZ = "America/Toronto"
+
+
+def fake(tz, preset, day=None):
+    d = day or u.ymd_in(tz)
+    if d == u.ymd_in(tz, 3):
+        raise RuntimeError("HTTP 500")
+    label = u.ymd_in(tz, 9) if d == u.ymd_in(tz, 4) else d
+    rows = [{"prayerName": n, "prayerBegins": "12:00:00", "prayerAdhan": "12:00:00", "prayerIqamah": "12:10:00"}
+            for n in u.REQUIRED]
+    return {"data": {"prayerOfDay": {"prayerDate": label + "T00:00:00", "singlePrayers": rows}}}, []
+
+
+saved = u.PROVIDERS["masjidal"]
+u.PROVIDERS["masjidal"] = fake
+try:
+    out = Path(tempfile.mkdtemp()) / "prayers.json"
+    u.publish("masjid-el-noor", {"data": {"publish_days": 6}}, out)
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    check("today stays on top", u.ymd_in(TZ), doc["data"]["prayerOfDay"]["prayerDate"][:10])
+    check("days ahead, failed and mislabelled ones skipped",
+          [u.ymd_in(TZ, i) for i in (1, 2, 5)], sorted(doc.get("upcoming", {})))
+    check("each day carries its own date", True,
+          all(v["prayerDate"][:10] == k for k, v in doc["upcoming"].items()))
+finally:
+    u.PROVIDERS["masjidal"] = saved
+
+
+def validate_rejects(date_str, expect):
+    doc = {"data": {"prayerOfDay": {"prayerDate": date_str + "T00:00:00",
+           "singlePrayers": [{"prayerName": n, "prayerAdhan": "12:00:00"} for n in u.REQUIRED]}}}
+    try:
+        u.validate(doc, TZ, expect=expect)
+    except RuntimeError:
+        return True
+    return False
+
+
+check("expect: another date is rejected", True, validate_rejects(u.ymd_in(TZ), u.ymd_in(TZ, 2)))
+check("expect: the asked date is accepted", False, validate_rejects(u.ymd_in(TZ, 2), u.ymd_in(TZ, 2)))
+
 sys.exit(1 if FAILS else 0)
