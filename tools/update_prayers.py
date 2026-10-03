@@ -340,11 +340,33 @@ def publish(mosque_id: str, config: dict, out: Path) -> str:
     return date_str
 
 
+def preset_id(name: str) -> str:
+    """A real preset in mosques/: the name arrives from a workflow input."""
+    import re
+    if not re.fullmatch(r"[a-z0-9-]+", name or "") or name.startswith("example-"):
+        raise RuntimeError(f"not a mosque id: {name!r}")
+    if not (ROOT / "mosques" / f"{name}.json").is_file():
+        raise RuntimeError(f"no preset mosques/{name}.json")
+    return name
+
+
 def main() -> int:
     config = read_json(ROOT / "config.json", {}) or {}
     default = os.environ.get("PRAYER_MOSQUE") or config.get("mosque") or "masjid-el-noor"
+    args = sys.argv[1:]
 
-    if "--all" not in sys.argv[1:]:
+    if "--mosque" in args:
+        # Only the mosque a device uses: data/<id>/prayers.json, plus the root
+        # prayers.json when it is the default mosque (older devices read it).
+        i = args.index("--mosque")
+        mosque_id = preset_id(args[i + 1] if i + 1 < len(args) else "")
+        src = ROOT / "data" / mosque_id / "prayers.json"
+        publish(mosque_id, config, src)
+        if mosque_id == default and (not OUT.exists() or OUT.read_text(encoding="utf-8") != src.read_text(encoding="utf-8")):
+            OUT.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        return 0
+
+    if "--all" not in args:
         # Single-mosque mode (original behaviour): prayers.json for the default.
         publish(default, config, OUT)
         return 0

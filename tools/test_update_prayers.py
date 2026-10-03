@@ -50,4 +50,20 @@ base = "https://portal.example/v1/masjid/Prayer/GetPrayerTimesOfDay?masjidId=11"
 check("masjid_url swaps id", base.replace("=11", "=359"), u.masjid_url(base, 359))
 check("masjid_url keeps base", base, u.masjid_url(base, None))
 
+
+
+def rejects(name):
+    try:
+        u.preset_id(name)
+    except RuntimeError:
+        return True
+    return False
+
+
+check("preset id accepted", "masjid-el-noor", u.preset_id("masjid-el-noor"))
+check("unknown preset rejected", True, rejects("no-such-mosque"))
+check("example preset rejected", True, rejects("example-second-mosque"))
+check("path rejected", True, rejects("../config"))
+check("empty rejected", True, rejects(""))
+
 sys.exit(1 if FAILS else 0)
