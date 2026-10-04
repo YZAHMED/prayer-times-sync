@@ -488,12 +488,40 @@ ordered_devices() { # prints device ids, best first, de-duplicated
 # ---------------------------------------------------------------------------
 # Playback
 # ---------------------------------------------------------------------------
+# Speech leveller (audio.normalize, the default). A mosque stream is mostly
+# near-silence, then a loud adhan, then an iqamah often ~30 dB quieter on the
+# same mic. A noise gate keeps the silence silent, a compressor lifts quiet
+# speech and a limiter holds peaks at -2 dBFS. Tuned on a real broadcast
+# (RMS): adhan -13, iqamah -18, silence -66 dBFS. loudnorm, used before,
+# lowered the adhan by 11 dB and left the iqamah at -50.
+LEVELLER='agate=threshold=0.003:ratio=20:attack=5:release=500,acompressor=threshold=0.01:ratio=20:attack=5:release=400:makeup=40,alimiter=limit=0.8:level=false'
+# Level meter: with mpv, the peak of what is actually played is written once a
+# second to $LEVEL_FILE (set per attempt by run_window), so the scheduler knows
+# whether anything audible went out, and the history can say how loud it was.
+LEVEL_DIR="$PS_STATE_DIR/levels"
+# direct=1: write each reading at once (buffered, the first reading lands after
+# ~6 minutes, too late for the adhan check).
+LEVEL_METER='asetnsamples=n=44100:p=0,astats=metadata=1:reset=1,ametadata=mode=print:key=lavfi.astats.Overall.Peak_level:direct=1'
+HEARD_DBFS=-20      # a played peak above this counts as audible speech
+
+loudest_level() { # loudest_level FILE... : highest peak (dBFS) logged, or nothing
+    cat "$@" 2>/dev/null | sed -n 's/^lavfi\.astats\.Overall\.Peak_level=\(-\{0,1\}[0-9][0-9.]*\)$/\1/p' \
+        | awk 'NR == 1 || $1 + 0 > m + 0 { m = $1 } END { if (NR) print m }'
+}
+
+level_heard() { # level_heard DBFS : is DBFS above HEARD_DBFS?
+    awk -v p="$1" -v h="$HEARD_DBFS" 'BEGIN { exit !(p + 0 > h + 0) }'
+}
+
 play_attempt() { # play_attempt DEVICE URL MAX_SECONDS
     _dev="$1"; _url="$2"; _max="$3"
     _vol=$(cfg_int 'audio.volume' 100)
     _filter=$(cfg 'audio.filter' "")
     if [ -z "$_filter" ] && [ "$(cfg_bool 'audio.normalize' true)" = "1" ]; then
-        _filter="loudnorm"
+        _filter="$LEVELLER"
+    fi
+    if [ -n "${LEVEL_FILE:-}" ]; then
+        _filter="${_filter:+$_filter,}$LEVEL_METER:file=$LEVEL_FILE"
     fi
     detect_player || { log_error "no media player installed (mpv, ffplay, mpg123 or cvlc)"; return 1; }
 
@@ -505,7 +533,7 @@ play_attempt() { # play_attempt DEVICE URL MAX_SECONDS
                    --network-timeout=20 \
                    --stream-lavf-o=reconnect=1,reconnect_at_eof=1,reconnect_streamed=1,reconnect_delay_max=10 \
                    --user-agent="prayer-sync/$VERSION"
-            [ -n "$_filter" ] && set -- "$@" --af="$_filter"
+            [ -n "$_filter" ] && set -- "$@" --af="lavfi=[$_filter]"
             _extra=$(cfg 'audio.extra_args' "")
             if [ -n "$_extra" ]; then
                 # Deliberately unquoted: a list of flags, not one word.
@@ -552,6 +580,29 @@ _nth_line() { sed -n "${1}p" "$2"; }
 # The mosque often starts broadcasting only moments before the adhan, and the
 # window opens before that, so a failed connection is normal and must be
 # retried rather than treated as fatal. Streams and outputs are both cycled.
+# adhan_guard NAME GUARD_AT DEVICE LOCAL_FILE (background, one per window):
+# at GUARD_AT, if the level meter shows nothing audible was played, play the
+# local adhan once. No meter data at all means the meter is unavailable (a
+# player or filter problem), never "silence": then do nothing.
+adhan_guard() {
+    trap 'stop_playback; exit 0' TERM INT
+    while [ "$(now_sec)" -lt "$2" ]; do sleep 5; done
+    _gl=$(loudest_level "$LEVEL_DIR"/*.log)
+    if [ -z "$_gl" ]; then
+        log_warn "$1: no level readings by $(sec_to_hm "$2") — cannot tell whether the adhan was audible"
+        return 0
+    fi
+    level_heard "$_gl" && return 0
+    if [ -z "$4" ]; then
+        log_warn "$1: nothing audible from the stream by $(sec_to_hm "$2") (loudest ${_gl} dBFS) and no local adhan file"
+        return 0
+    fi
+    log_warn "$1: nothing audible from the stream by $(sec_to_hm "$2") (loudest ${_gl} dBFS) — playing the local adhan"
+    LEVEL_FILE="$LEVEL_DIR/local.log"
+    play_attempt "$3" "$4" 600
+    log_info "$1: local adhan played (loudest $(loudest_level "$LEVEL_DIR/local.log") dBFS)"
+}
+
 run_window() { # run_window NAME WINDOW_START WINDOW_END
     _name="$1"; _wstart="$2"; _wend="$3"
     log_info "$_name: window open $(sec_to_hm "$_wstart")-$(sec_to_hm "$_wend")"
@@ -573,6 +624,16 @@ run_window() { # run_window NAME WINDOW_START WINDOW_END
     fi
 
     _ui=1; _di=1; _played_total=0; _attempts=0; _last_resolve=$(now_sec); _minok=8
+    # Guaranteed adhan: a mosque stream can be "live" and silent (a broadcast
+    # left running with the mic off). If nothing audible has been played by
+    # the adhan time + stream.adhan_guard_minutes, play the local adhan once
+    # alongside the stream, which keeps running for the iqamah. 0 disables.
+    rm -rf "$LEVEL_DIR"; mkdir -p "$LEVEL_DIR" 2>/dev/null || true
+    _pre=$(cfg_int "offsets.$_name.pre" "$(cfg_int 'offsets.default.pre' 5)")
+    _guard_min=$(cfg_int 'stream.adhan_guard_minutes' 2)
+    _guard_at=$((_wstart + (_pre + _guard_min) * 60)); _guard_pid=""
+    detect_player >/dev/null 2>&1 || true     # PLAYER_BIN is set lazily; the meter needs mpv
+    [ "$_guard_min" -gt 0 ] && [ "$_guard_at" -lt "$_wend" ] && [ "$PLAYER_BIN" = mpv ] || _guard_at=0
     # Once the live stream has played, its end is the end of the broadcast:
     # keep trying to resume it for a short grace (a dropped connection), never
     # fall back to the local file, and close the window when the grace runs out.
@@ -636,8 +697,14 @@ run_window() { # run_window NAME WINDOW_START WINDOW_END
 
         log_info "$_name: playing $_url via $_dev (${_remaining}s left)"
         set_sink_volumes            # before _t0: never counted as playback
+        if [ "$_local" = "0" ] && [ "$_guard_at" -gt 0 ] && [ -z "$_guard_pid" ]; then
+            adhan_guard "$_name" "$_guard_at" "$_dev" "$(grep -m1 '^/' "$_urllist")" &
+            _guard_pid=$!
+        fi
+        LEVEL_FILE="$LEVEL_DIR/$_attempts.log"
         _t0=$(now_sec)
         play_attempt "$_dev" "$_url" "$_remaining"
+        LEVEL_FILE=""
         _t1=$(now_sec)
         _ran=$((_t1 - _t0)); [ "$_ran" -lt 0 ] && _ran=0
         _played_total=$((_played_total + _ran))
@@ -670,8 +737,14 @@ run_window() { # run_window NAME WINDOW_START WINDOW_END
     done
 
     rm -f "$_devlist" "$_urllist"
+    if [ -n "$_guard_pid" ]; then
+        have pkill && pkill -TERM -P "$_guard_pid" 2>/dev/null
+        kill -TERM "$_guard_pid" 2>/dev/null
+        wait "$_guard_pid" 2>/dev/null
+    fi
+    _loudest=$(loudest_level "$LEVEL_DIR"/*.log)
     if [ "$_played_total" -ge "$_minok" ]; then
-        log_info "$_name: window complete (${_played_total}s of audio)"
+        log_info "$_name: window complete (${_played_total}s of audio${_loudest:+, loudest ${_loudest} dBFS})"
         return 0
     fi
     log_error "$_name: window ended with no successful playback"
@@ -1163,6 +1236,7 @@ cmd_selftest() {
                resolve_stream stream_is_playable remember_good_stream \
                audio_devices ordered_devices classify_device unmute_everything \
                set_sink_volumes _pw_sinks _pw _vol_float _vol_pct \
+               loudest_level level_heard adhan_guard \
                bt_ensure_connected detect_player play_attempt stop_playback run_window \
                _sleep_bounded _nth_line _due_window _load_windows \
                now_sec today_ymd sec_to_hm hms_to_sec _dec \
@@ -1194,6 +1268,15 @@ cmd_selftest() {
     _t "reject 24:00"   ""      "$(hms_to_sec 24:00 2>/dev/null)"
     _t "reject junk"    ""      "$(hms_to_sec nope 2>/dev/null)"
     _n=$(now_sec); _t "now_sec in range" "1" "$( [ "$_n" -ge 0 ] && [ "$_n" -lt 86400 ] && echo 1 || echo 0)"
+
+    echo "level meter"
+    _lf="${TMPDIR:-/tmp}/prayer-sync.levels.$$"
+    printf 'frame:0    pts:0       pts_time:0\nlavfi.astats.Overall.Peak_level=-43.100000\nframe:1    pts:44100   pts_time:1\nlavfi.astats.Overall.Peak_level=-1.900000\nframe:2    pts:88200   pts_time:2\nlavfi.astats.Overall.Peak_level=-inf\n' > "$_lf"
+    _t "loudest peak"        "-1.900000" "$(loudest_level "$_lf")"
+    _t "no file -> nothing"  ""          "$(loudest_level "$_lf.none")"
+    _t "-1.9 is audible"     "yes" "$(level_heard -1.9 && echo yes || echo no)"
+    _t "-43 is not"          "no"  "$(level_heard -43.1 && echo yes || echo no)"
+    rm -f "$_lf"
 
     echo "volume conversion"
     _t "100 -> 1.00"  "1.00" "$(_vol_float 100)"
