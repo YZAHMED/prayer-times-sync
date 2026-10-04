@@ -840,7 +840,8 @@ def cmd_status(cfg: dict) -> int:
 
 HISTORY_RE_TS      = re.compile(r'(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})')
 HISTORY_RE_OPEN    = re.compile(r'([A-Za-z]+): window open (\d{2}:\d{2})-(\d{2}:\d{2})')
-HISTORY_RE_PLAYED  = re.compile(r'([A-Za-z]+): window complete \((\d+)s of audio\)')
+HISTORY_RE_PLAYED  = re.compile(r'([A-Za-z]+): window complete \((\d+)s of audio(?:, loudest (-?[\d.]+) dBFS)?\)')
+HISTORY_RE_GUARD   = re.compile(r'([A-Za-z]+): nothing audible from the stream .* playing the local adhan')
 HISTORY_RE_FAILED  = re.compile(r'([A-Za-z]+): window ended with no successful playback')
 HISTORY_RE_START   = re.compile(r'prayer-sync \S+ starting')
 HISTORY_RE_STOP    = re.compile(r'shutting down')
@@ -860,7 +861,12 @@ def _history_events(lines):
             continue
         pm = HISTORY_RE_PLAYED.search(line)
         if pm:
-            yield d, t, "played", pm.group(1), f"{pm.group(2)}s"
+            loud = f", loudest {float(pm.group(3)):.0f} dBFS" if pm.group(3) else ""
+            yield d, t, "played", pm.group(1), f"{pm.group(2)}s{loud}"
+            continue
+        gm = HISTORY_RE_GUARD.search(line)
+        if gm:
+            yield d, t, "guard", gm.group(1), "local adhan"
             continue
         fm = HISTORY_RE_FAILED.search(line)
         if fm:
@@ -878,13 +884,17 @@ def _history_pair(events):
     caller sees one row per prayer window with a clear outcome."""
     rows = []
     pending = None
+    guarded = False     # the stream was silent and the local adhan was played
     for d, t, kind, name, detail in events:
         if kind == "open":
             if pending:
                 rows.append(pending + ("UNKNOWN", "no completion recorded"))
             pending = (d, t, name, detail)
+            guarded = False
+        elif kind == "guard" and pending and pending[2] == name:
+            guarded = True
         elif kind == "played" and pending and pending[2] == name:
-            rows.append(pending + ("PLAYED", detail))
+            rows.append(pending + ("PLAYED", detail + ("; stream silent, local adhan played" if guarded else "")))
             pending = None
         elif kind == "failed" and pending and pending[2] == name:
             rows.append(pending + ("MISSED", detail))
@@ -1258,6 +1268,20 @@ def run_selftest() -> int:
     check("Dhuhr missed", ("Dhuhr", "MISSED"), (rows[1][2], rows[1][4]))
     check("Asr cut short by service stop", ("Asr", "MISSED", "service stopped mid-window"),
           (rows[2][2], rows[2][4], rows[2][5]))
+
+    loud = [
+        "2026-10-04T20:15:00-0400 [INFO] Isha: window open 20:15-20:45",
+        "2026-10-04T20:45:00-0400 [INFO] Isha: window complete (1797s of audio, loudest -1.900000 dBFS)",
+        "2026-10-04T05:55:00-0400 [INFO] Fajr: window open 05:55-06:30",
+        "2026-10-04T06:02:00-0400 [WARN] Fajr: nothing audible from the stream by 06:02 (loudest -43.1 dBFS) — playing the local adhan",
+        "2026-10-04T06:30:00-0400 [INFO] Fajr: window complete (2100s of audio, loudest -1.9 dBFS)",
+    ]
+    rows = _history_pair(list(_history_events(loud)))
+    check("loudness shown", ("PLAYED", "1797s, loudest -2 dBFS"), (rows[0][4], rows[0][5]))
+    check("window column unchanged", "20:15-20:45", rows[0][3])
+    check("local adhan noted", "2100s, loudest -2 dBFS; stream silent, local adhan played", rows[1][5])
+    check("older lines still parse", ("PLAYED", "262s"),
+          _history_pair(list(_history_events(sample[1:3])))[0][4:6])
 
     print()
     if failed:

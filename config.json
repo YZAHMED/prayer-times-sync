@@ -5,7 +5,7 @@
   "mosque": "masjid-el-noor",
 
   "stream": {
-    "$comment": "The stream SOURCE (provider mixlr|static|icecast, mixlr_slug or url) comes from the mosque preset in mosques/<mosque>.json, so switching mosques switches the stream; it is resolved fresh at play time. The fallbacks below apply to every mosque. fallback_files.NAME overrides fallback_file for that specific prayer — Fajr uses a Fajr-specific adhan (with 'as-salatu khayrun min an-nawm'). end_grace_seconds: once the live stream has played, how long to wait for it to come back after it stops before ending the prayer early (the local file is never used after the live stream has played).",
+    "$comment": "The stream SOURCE (provider mixlr|static|icecast, mixlr_slug or url) comes from the mosque preset in mosques/<mosque>.json, so switching mosques switches the stream; it is resolved fresh at play time. The fallbacks below apply to every mosque. fallback_files.NAME overrides fallback_file for that specific prayer — Fajr uses a Fajr-specific adhan (with 'as-salatu khayrun min an-nawm'). end_grace_seconds: once the live stream has played, how long to wait for it to come back after it stops before ending the prayer early (the local file is never used after the live stream has played). adhan_guard_minutes: if nothing audible has been played by this many minutes after the adhan time (a stream that is 'live' but silent), the local adhan plays once alongside the stream; 0 disables (mpv only).",
     "fallback_urls": [],
     "fallback_file": "/usr/local/share/prayer-sync/adhan.mp3",
     "fallback_files": {
@@ -13,7 +13,8 @@
     },
     "resolve_timeout_seconds": 12,
     "require_live": false,
-    "end_grace_seconds": 60
+    "end_grace_seconds": 60,
+    "adhan_guard_minutes": 2
   },
 
   "audio": {
