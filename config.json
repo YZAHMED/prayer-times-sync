@@ -1,9 +1,7 @@
 {
   "$comment": "Device configuration. Anything here overrides the mosque preset in mosques/<mosque>.json. Edit and commit; devices pick it up on their next refresh. A device can also keep a local-only override at /etc/prayer-sync/config.local.json which wins over everything.",
   "version": 2,
-
   "mosque": "masjid-el-noor",
-
   "stream": {
     "$comment": "The stream SOURCE (provider mixlr|static|icecast, mixlr_slug or url) comes from the mosque preset in mosques/<mosque>.json, so switching mosques switches the stream; it is resolved fresh at play time. The fallbacks below apply to every mosque. fallback_files.NAME overrides fallback_file for that specific prayer — Fajr uses a Fajr-specific adhan (with 'as-salatu khayrun min an-nawm'). end_grace_seconds: once the live stream has played, how long to wait for it to come back after it stops before ending the prayer early (the local file is never used after the live stream has played). adhan_guard_minutes: if nothing audible has been played by this many minutes after the adhan time (a stream that is 'live' but silent), the local adhan plays once alongside the stream; 0 disables (mpv only). Off by default: a mosque that calls the adhan a few minutes late then overlaps it (seen at Maghrib, 2 min late).",
     "fallback_urls": [],
@@ -16,11 +14,16 @@
     "end_grace_seconds": 60,
     "adhan_guard_minutes": 0
   },
-
   "audio": {
     "$comment": "output: auto | bluetooth | aux | hdmi | usb | <exact sink/device name>. 'auto' walks 'priority' and uses the first one that really plays.",
     "output": "auto",
-    "priority": ["bluetooth", "aux", "usb", "hdmi", "default"],
+    "priority": [
+      "bluetooth",
+      "aux",
+      "usb",
+      "hdmi",
+      "default"
+    ],
     "bluetooth_mac": "",
     "bluetooth_connect_timeout": 25,
     "volume": 100,
@@ -30,10 +33,15 @@
     "extra_args": "",
     "strict_output": false
   },
-
   "schedule": {
     "$comment": "Which prayers to broadcast, and which timetable fields bracket the window.",
-    "prayers": ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"],
+    "prayers": [
+      "Fajr",
+      "Dhuhr",
+      "Asr",
+      "Maghrib",
+      "Isha"
+    ],
     "start_anchor": "prayerAdhan",
     "stop_anchor": "prayerIqamah",
     "jumah_replaces_dhuhr": true,
@@ -43,31 +51,48 @@
     "max_window_minutes": 90,
     "catch_up_grace_minutes": 3
   },
-
   "offsets": {
-    "$comment": "pre = minutes BEFORE start_anchor to open the stream. post = minutes AFTER stop_anchor to close it. 'default' applies to anything not listed.",
-    "default": { "pre": 5, "post": 15 },
-    "Fajr":    { "pre": 5, "post": 15 },
-    "Dhuhr":   { "pre": 5, "post": 15 },
-    "Jumah":   { "pre": 10, "post": 20 },
-    "Asr":     { "pre": 5, "post": 15 },
-    "Maghrib": { "pre": 2, "post": 10 },
-    "Isha":    { "pre": 5, "post": 15 }
+    "$comment": "pre = minutes BEFORE start_anchor to open the stream. post = minutes AFTER stop_anchor to close it. 'default' applies to anything not listed. post is 30 for every prayer: the window must outlast the prayer itself (a late adhan, long recitation); measured: Fajr ran 24 min past the iqamah time.",
+    "default": {
+      "pre": 5,
+      "post": 30
+    },
+    "Fajr": {
+      "pre": 5,
+      "post": 30
+    },
+    "Dhuhr": {
+      "pre": 5,
+      "post": 30
+    },
+    "Jumah": {
+      "pre": 10,
+      "post": 30
+    },
+    "Asr": {
+      "pre": 5,
+      "post": 30
+    },
+    "Maghrib": {
+      "pre": 2,
+      "post": 30
+    },
+    "Isha": {
+      "pre": 5,
+      "post": 30
+    }
   },
-
   "offline": {
     "$comment": "When no fresh timetable can be fetched, times are computed locally from lat/long. assumed_iqamah_gap replaces the unknowable iqamah time.",
     "enabled": true,
     "assumed_iqamah_gap_minutes": 10,
     "stale_after_days": 2
   },
-
   "data": {
     "remote_base": "https://raw.githubusercontent.com/YZAHMED/prayer-times-sync/main",
     "refresh_timeout_seconds": 25,
     "refresh_retries": 3
   },
-
   "quiet_hours": {
     "$comment": "Optional hard mute window (local time). Set enabled=true to suppress playback overnight regardless of schedule.",
     "enabled": false,
