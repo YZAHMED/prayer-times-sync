@@ -488,13 +488,13 @@ ordered_devices() { # prints device ids, best first, de-duplicated
 # ---------------------------------------------------------------------------
 # Playback
 # ---------------------------------------------------------------------------
-# Speech leveller (audio.normalize, the default). A mosque stream is mostly
-# near-silence, then a loud adhan, then an iqamah often ~30 dB quieter on the
-# same mic. A noise gate keeps the silence silent, a compressor lifts quiet
-# speech and a limiter holds peaks at -2 dBFS. Tuned on a real broadcast
-# (RMS): adhan -13, iqamah -18, silence -66 dBFS. loudnorm, used before,
-# lowered the adhan by 11 dB and left the iqamah at -50.
-LEVELLER='agate=threshold=0.003:ratio=20:attack=5:release=500,acompressor=threshold=0.01:ratio=20:attack=5:release=400:makeup=40,alimiter=limit=0.8:level=false'
+# Speech levelling (audio.normalize, the default): FFmpeg's standard dynamic
+# normaliser with its default settings. No gate, so nothing is ever cut off
+# (the imam's breaths, room sound); it raises quiet speech gradually. On a
+# real mosque broadcast: adhan unchanged (-0.5 dBFS peak), iqamah from -22.5
+# to -3.6 dBFS peak, room sound while waiting -54 dBFS RMS. (A noise gate,
+# used briefly, cut the audio at every pause; loudnorm buried the iqamah.)
+LEVELLER='dynaudnorm'
 # Level meter: with mpv, the peak of what is actually played is written once a
 # second to $LEVEL_FILE (set per attempt by run_window), so the scheduler knows
 # whether anything audible went out, and the history can say how loud it was.
