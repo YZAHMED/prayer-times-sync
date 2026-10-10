@@ -24,7 +24,7 @@
     "bluetooth_mac": "",
     "bluetooth_connect_timeout": 25,
     "volume": 100,
-    "normalize": true,
+    "normalize": false,
     "verify_playback": true,
     "verify_seconds": 6,
     "extra_args": "",
