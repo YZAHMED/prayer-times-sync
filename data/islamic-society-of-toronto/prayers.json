@@ -4,11 +4,11 @@
     "city": "Toronto",
     "prayers": null,
     "prayerOfDay": {
-      "prayerDate": "2026-10-19T00:00:00",
+      "prayerDate": "2026-10-20T00:00:00",
       "singlePrayers": [
         {
           "prayerName": "Fajr",
-          "prayerBegins": "06:19:00",
+          "prayerBegins": "06:20:00",
           "prayerAdhan": "06:25:00",
           "prayerIqamah": "06:40:00"
         },
@@ -32,19 +32,19 @@
         },
         {
           "prayerName": "Asr",
-          "prayerBegins": "16:42:00",
+          "prayerBegins": "16:41:00",
           "prayerAdhan": "16:50:00",
           "prayerIqamah": "17:00:00"
         },
         {
           "prayerName": "Maghrib",
-          "prayerBegins": "18:29:00",
-          "prayerAdhan": "18:29:00",
-          "prayerIqamah": "18:32:00"
+          "prayerBegins": "18:27:00",
+          "prayerAdhan": "18:27:00",
+          "prayerIqamah": "18:30:00"
         },
         {
           "prayerName": "Isha",
-          "prayerBegins": "19:39:00",
+          "prayerBegins": "19:38:00",
           "prayerAdhan": "20:30:00",
           "prayerIqamah": "20:45:00"
         }
