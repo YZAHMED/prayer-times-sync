@@ -8,14 +8,14 @@
       "singlePrayers": [
         {
           "prayerName": "Fajr",
-          "prayerBegins": "06:24:00",
+          "prayerBegins": "06:25:00",
           "prayerAdhan": "06:25:00",
           "prayerIqamah": "06:40:00"
         },
         {
           "prayerName": "Sunrise",
           "prayerBegins": null,
-          "prayerAdhan": "07:44:00",
+          "prayerAdhan": "07:45:00",
           "prayerIqamah": null
         },
         {
